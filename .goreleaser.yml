@@ -1,0 +1,27 @@
+env:
+  - RELEASE_BUILDS=dist/gotp_darwin_amd64/gotp dist/gotp_linux_amd64/gotp
+
+before:
+  hooks:
+  - make deps
+
+builds:
+  - binary: gotp
+    main: ./cmd/main.go
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+    ldflags:
+      - -s -w -X "main.buildString={{ .Tag }} ({{ .ShortCommit }} {{ .Date }})"
+
+    hooks:
+      # stuff executables with static assets.
+      post: make pack-releases
+
+archive:
+  format: tar.gz
+  files:
+    - README.md
+    - LICENSE
