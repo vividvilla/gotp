@@ -65,7 +65,7 @@ func init() {
 
 	// Parse flags.
 	flag.Parse()
-	if flag.NFlag() == 0 || len(flag.Args()) == 0 {
+	if flag.NFlag() == 0 && len(flag.Args()) == 0 {
 		flag.Usage()
 		os.Exit(0)
 		return
