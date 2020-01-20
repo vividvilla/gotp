@@ -132,9 +132,22 @@ func initSSEServer(fw *fsnotify.Watcher) *sse.Server {
 	return server
 }
 
+func binPath() (string, error) {
+	path, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
 func initFileSystem() (stuffbin.FileSystem, error) {
+	path, err := binPath()
+	if err != nil {
+		return nil, fmt.Errorf("error getting binary path: %v", err.Error())
+	}
+
 	// Read stuffed data from self.
-	fs, err := stuffbin.UnStuff(os.Args[0])
+	fs, err := stuffbin.UnStuff(path)
 	if err != nil {
 		if err == stuffbin.ErrNoID {
 			fs, err = stuffbin.NewLocalFS("/", "./", "../assets/index.html:/assets/index.html")
