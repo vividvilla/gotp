@@ -2,6 +2,8 @@
 
 Simple utility to live edit Go template and preview with custom data.
 
+![Screenshot](assets/screenshot.png "Gotp web mode")
+
 ## Installation
 
 Download the latest release from the [releases page](/releases) or clone this repository and run `make deps` && `make build`.
