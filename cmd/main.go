@@ -38,6 +38,7 @@ var (
 	tmplPath      string
 	baseTmplPaths []string
 	server        *sse.Server
+	buildString   = "unknown"
 	nodeFieldRe   = regexp.MustCompile(`{{(?:\s+)?(\.[\w]+)(?:\s+)?}}`)
 )
 
@@ -50,11 +51,13 @@ type Resp struct {
 func init() {
 	var (
 		tmplDataRaw string
+		version     bool
 	)
 	flag.StringVarP(&addr, "addr", "a", ":1111", "Address to start the server on.")
 	flag.StringArrayVarP(&baseTmplPaths, "base-tmpl", "b", []string{}, "Base template, or glob pattern.")
 	flag.StringVarP(&tmplDataRaw, "data", "d", "", "Template data.")
 	flag.BoolVarP(&outputModeWeb, "web", "w", false, "Run web UI")
+	flag.BoolVarP(&version, "version", "v", false, "Version info")
 
 	// Usage help.
 	flag.Usage = func() {
@@ -69,6 +72,12 @@ func init() {
 		flag.Usage()
 		os.Exit(0)
 		return
+	}
+
+	// Print version and exit
+	if version {
+		fmt.Printf("Gotp - %s\n", buildString)
+		os.Exit(0)
 	}
 
 	// Assign target template path.

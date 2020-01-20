@@ -1,13 +1,13 @@
 LAST_COMMIT := $(shell git rev-parse --short HEAD)
 LAST_COMMIT_DATE := $(shell git show -s --format=%ci ${LAST_COMMIT})
-VERSION := $(shell git describe)
-BUILDSTR := ${VERSION} (${LAST_COMMIT} $(shell date -u +"%Y-%m-%dT%H:%M:%S%z"))
+TAG := $(shell git describe --tags)
+BUILDSTR := ${TAG} (${LAST_COMMIT} ${LAST_COMMIT_DATE})
 STATIC := assets/index.html
 BIN := gotp
 
 .PHONY: build
 build:
-	go build -o ${BIN} -ldflags="-X 'main.buildVersion=${VERSION}' -X 'main.buildDate=${BUILD_DATE}'" cmd/*.go
+	go build -o ${BIN} -ldflags="-X 'main.buildString=${BUILDSTR}'" cmd/*.go
 	- stuffbin -a stuff -in ${BIN} -out ${BIN} ./assets/index.html
 
 .PHONY: test
