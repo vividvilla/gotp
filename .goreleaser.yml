@@ -3,7 +3,7 @@ env:
 
 before:
   hooks:
-  - make deps
+    - make deps
 
 builds:
   - binary: gotp
@@ -20,8 +20,8 @@ builds:
       # stuff executables with static assets.
       post: make pack-releases
 
-archive:
-  format: tar.gz
-  files:
-    - README.md
-    - LICENSE
+archives:
+  - format: tar.gz
+    files:
+      - README.md
+      - LICENSE
