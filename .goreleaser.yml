@@ -1,5 +1,5 @@
 env:
-  - RELEASE_BUILDS=dist/gotp_darwin_amd64/gotp dist/gotp_linux_amd64/gotp
+  - RELEASE_BUILDS=dist/gotp_darwin_amd64/gotp dist/gotp_linux_amd64/gotp dist/gotp_windows_amd64/gotp.exe
 
 before:
   hooks:
