@@ -6,7 +6,7 @@ Simple utility to live edit Go template and preview with custom data.
 
 ## Installation
 
-Download the latest release from the [releases page](/releases) or clone this repository and run `make deps` && `make build`.
+Download the latest release from the [releases page](https://github.com/vividvilla/gotp/releases) or clone this repository and run `make deps` && `make build`.
 
 ## Usage
 
