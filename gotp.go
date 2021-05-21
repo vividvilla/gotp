@@ -2,10 +2,16 @@ package gotp
 
 import (
 	"bytes"
+	"html/template"
 	"path/filepath"
-	"text/template"
 	"text/template/parse"
+
+	"github.com/Masterminds/sprig"
 )
+
+type Config struct {
+	UseSprig bool
+}
 
 // NodeFields returns list of fields evaluated in template.
 func NodeFields(t *template.Template) []string {
@@ -27,9 +33,14 @@ func listNodeFields(node parse.Node, res []string) []string {
 }
 
 // GetTemplate returns a go template for given template paths.
-func GetTemplate(tmpl string, baseTmplPaths []string) (*template.Template, error) {
+func GetTemplate(cfg Config, tmpl string, baseTmplPaths []string) (*template.Template, error) {
 	var err error
 	t := template.New("main")
+
+	if cfg.UseSprig {
+		t = t.Funcs(sprig.FuncMap())
+	}
+
 	// Load base templates, if template name is glob pattern then it
 	// loads all matches templates.
 	for _, bt := range baseTmplPaths {
@@ -53,9 +64,9 @@ func GetTemplate(tmpl string, baseTmplPaths []string) (*template.Template, error
 }
 
 // Compile compiles given template and base templates with given data.
-func Compile(tmpl string, baseTmplPaths []string, data map[string]interface{}) ([]byte, error) {
+func Compile(cfg Config, tmpl string, baseTmplPaths []string, data map[string]interface{}) ([]byte, error) {
 	var err error
-	t, err := GetTemplate(tmpl, baseTmplPaths)
+	t, err := GetTemplate(cfg, tmpl, baseTmplPaths)
 	if err != nil {
 		return []byte(""), err
 	}

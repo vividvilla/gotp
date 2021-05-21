@@ -26,10 +26,12 @@ gotp --web --base-tmpl base.tmpl sample.tmpl
   -a, --addr string             Address to start the server on. (default ":1111")
   -b, --base-tmpl stringArray   Base template, or glob pattern.
   -d, --data string             Template data.
+      --sprig                   Enable sprig functions
+  -v, --version                 Version info
   -w, --web                     Run web UI
 ```
 
-It can run as either `commandline` or `web` mode. Commandline mode renders the template on stdout and
+It can run in either `commandline` or `web` mode. Commandline mode renders the template on stdout and
 web mode runs a web server which provides UI to update template data and live rendering when template changes.
 
 ```bash
@@ -38,6 +40,9 @@ gotp sample.tmpl
 
 # If your template uses base templates then you can specify it as a commandline flag.
 gotp --base-tmpl base.tmpl sample.tmpl
+
+# If your template uses Sprig template functions you can specify a flag.
+gotp --sprig --base-tmpl base.tmpl sample.tmpl
 
 # If there are multiple base templates then you can repeat the flag.
 gotp --base-tmpl base-header.tmpl --base-tmpl base-footer.tmpl sample.tmpl
@@ -58,4 +63,4 @@ gotp --web --addr :9000 --base-tmpl base.tmpl sample.tmpl
 
 ## Caveats
 
-Currently there is no support for Go template functions and pipelines.
+Currently there is no support for custom Go template functions and pipelines. Although, you can use the `--sprig` flag to enable [Sprig template functions](http://masterminds.github.io/sprig/).

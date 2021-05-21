@@ -38,6 +38,7 @@ var (
 	tmplPath      string
 	baseTmplPaths []string
 	server        *sse.Server
+	gotpCfg       gotp.Config
 	buildString   = "unknown"
 	nodeFieldRe   = regexp.MustCompile(`{{(?:\s+)?(\.[\w]+)(?:\s+)?}}`)
 )
@@ -58,6 +59,7 @@ func init() {
 	flag.StringVarP(&tmplDataRaw, "data", "d", "", "Template data.")
 	flag.BoolVarP(&outputModeWeb, "web", "w", false, "Run web UI")
 	flag.BoolVarP(&version, "version", "v", false, "Version info")
+	flag.BoolVar(&gotpCfg.UseSprig, "sprig", false, "Enable sprig functions")
 
 	// Usage help.
 	flag.Usage = func() {
@@ -229,7 +231,7 @@ func handleUpdateTemplateData(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleGetTemplateFields(w http.ResponseWriter, r *http.Request) {
-	t, err := gotp.GetTemplate(tmplPath, baseTmplPaths)
+	t, err := gotp.GetTemplate(gotpCfg, tmplPath, baseTmplPaths)
 	if err != nil {
 		writeJSONResp(w, http.StatusInternalServerError, nil, fmt.Sprintf("Error getting template fields: %v", err))
 		return
@@ -251,7 +253,7 @@ func handleGetTemplateFields(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	if !outputModeWeb {
-		b, err := gotp.Compile(tmplPath, baseTmplPaths, tmplData)
+		b, err := gotp.Compile(gotpCfg, tmplPath, baseTmplPaths, tmplData)
 		if err != nil {
 			fmt.Printf("error rendering template: %v\n", err)
 			os.Exit(1)
@@ -303,7 +305,7 @@ func main() {
 			return
 		}
 		// Complie the template.
-		b, err := gotp.Compile(tmplPath, baseTmplPaths, tmplData)
+		b, err := gotp.Compile(gotpCfg, tmplPath, baseTmplPaths, tmplData)
 		// If error send error as output.
 		if err != nil {
 			b = []byte(fmt.Sprintf("error rendering: %v", err))
