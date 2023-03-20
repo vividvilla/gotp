@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"text/template/parse"
 
-	"github.com/Masterminds/sprig"
+	"github.com/Masterminds/sprig/v3"
 )
 
 type Config struct {
