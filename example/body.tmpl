@@ -1,0 +1,37 @@
+{{define "main"}}
+<div class='snippet'>
+    <div class='metadata'>
+        <strong>{{.Title}}</strong>
+    </div>
+    <pre><code>{{.Content}}</code></pre>
+    <div>by: <strong>{{.Author}}</strong></div>
+    </br>
+    <div class='metadata'>
+        <time>Created: {{.Created}}</time>
+        <time>Expires: {{.Expires}}</time>
+    </div>
+</div>
+<style>
+    .snippet {
+        margin: 1rem 0;
+        padding: 1rem;
+        background-color: #f9f9f9;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+    }
+    .metadata {
+        margin-bottom: 0.5rem;
+        color: #555;
+    }
+    pre {
+        background-color: #f5f5f5;
+        padding: 1rem;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        overflow-x: auto;
+    }
+    code {
+        font-family: 'Courier New', Courier, monospace;
+    }
+</style>
+{{end}}

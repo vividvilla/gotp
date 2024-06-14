@@ -23,6 +23,7 @@ Usage:
 gotp sample.tmpl
 gotp --base-tmpl base.tmpl sample.tmpl
 gotp --base-tmpl base.tmpl sample.tmpl --data '{"name": "Gopher"}'
+gotp --web --base-tmpl base.tmpl sample.tmpl --data-file=data.json
 gotp --base-tmpl base/*.tmpl sample.tmpl
 gotp --base-tmpl base.tmpl sample.tmpl
 gotp --web sample.tmpl
@@ -41,6 +42,7 @@ var (
 	gotpCfg       gotp.Config
 	buildString   = "unknown"
 	nodeFieldRe   = regexp.MustCompile(`{{(?:\s+)?(\.[\w]+)(?:\s+)?}}`)
+	tmplDataFile  string
 )
 
 // Resp represents JSON response structure.
@@ -60,6 +62,7 @@ func init() {
 	flag.BoolVarP(&outputModeWeb, "web", "w", false, "Run web UI")
 	flag.BoolVarP(&version, "version", "v", false, "Version info")
 	flag.BoolVar(&gotpCfg.UseSprig, "sprig", false, "Enable sprig functions")
+	flag.StringVar(&tmplDataFile, "data-file", "", "Location of file containing template data.")
 
 	// Usage help.
 	flag.Usage = func() {
@@ -88,6 +91,20 @@ func init() {
 	// Assign templateData
 	if tmplDataRaw != "" {
 		d, err := decodeTemplateData([]byte(tmplDataRaw))
+		if err != nil {
+			fmt.Printf("invalid template data: %v", err)
+			os.Exit(1)
+		}
+		tmplData = d
+	}
+
+	if tmplDataFile != "" {
+		tmplDataRaw, err := os.ReadFile(tmplDataFile)
+		if err != nil {
+			fmt.Printf("Error reading template data file: %v", err)
+			os.Exit(1)
+		}
+		d, err := decodeTemplateData(tmplDataRaw)
 		if err != nil {
 			fmt.Printf("invalid template data: %v", err)
 			os.Exit(1)
