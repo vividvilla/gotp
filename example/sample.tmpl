@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang='en'>
+    <head>
+        <meta charset='utf-8'>
+        <title>Snippetbox</title>
+                <style>
+            body {
+                font-family: Arial, sans-serif;
+                background-color: #f0f0f0;
+                color: #333;
+                margin: 0;
+                padding: 0;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                min-height: 100vh;
+            }
+            header {
+                background-color: #6200ea;
+                color: white;
+                width: 100%;
+                text-align: center;
+                padding: 1rem 0;
+            }
+            main {
+                background-color: white;
+                padding: 2rem;
+                margin: 1rem;
+                box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+                border-radius: 8px;
+                max-width: 600px;
+                width: 100%;
+            }
+            footer {
+                background-color: #6200ea;
+                color: white;
+                width: 100%;
+                text-align: center;
+                padding: 0.5rem 0;
+                position: absolute;
+                bottom: 0;
+            }
+            footer a {
+                color: #bb86fc;
+                text-decoration: none;
+            }
+        </style>
+    </head>
+    <body>
+        <header>
+            <h1>Snippetbox</h1>
+        </header>
+        <main>
+            {{template "main" .}}
+        </main>
+        <footer>
+            <!-- Update the footer to include the current year -->
+            Powered by <a href='https://golang.org/'>Go</a> in {{.CurrentYear}}
+        </footer>
+    </body>
+</html>

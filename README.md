@@ -17,6 +17,7 @@ Usage:
 gotp sample.tmpl
 gotp --base-tmpl base.tmpl sample.tmpl
 gotp --base-tmpl base.tmpl sample.tmpl --data '{"name": "Gopher"}'
+gotp --base-tmpl base.tmpl sample.tmpl --data-file=data.json
 gotp --base-tmpl base/*.tmpl sample.tmpl
 gotp --base-tmpl base.tmpl sample.tmpl
 gotp --web sample.tmpl
@@ -29,6 +30,7 @@ gotp --web --base-tmpl base.tmpl sample.tmpl
       --sprig                   Enable sprig functions
   -v, --version                 Version info
   -w, --web                     Run web UI
+      --data-file               File containing template data. 
 ```
 
 It can run in either `commandline` or `web` mode. Commandline mode renders the template on stdout and
@@ -53,6 +55,10 @@ gotp --base-tmpl "base-*.tmpl" sample.tmpl
 # Specify the data required by templates as a JSON input. For example if your template
 # has variable `{{ .name }}` then you can specify JSON data as `{ "name": "Gopher" }`.
 gotp --base-tmpl base.tmpl sample.tmpl --data '{"name": "Gopher"}'
+
+# Specify the data required by templates by providing a file location. For example if your template
+# data is contained in a file called `data.json` then you can specify the file location.
+gotp --base-tmpl base.tmpl sample.tmpl --data-file=data.json
 
 # You can do all of the above commands with `--web` flag to start a web server which renders the output.
 gotp --web --base-tmpl base.tmpl sample.tmpl --data '{"name": "Gopher"}'
