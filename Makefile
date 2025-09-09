@@ -20,7 +20,7 @@ clean:
 
 .PHONY: deps
 deps:
-	go get -u github.com/knadh/stuffbin/...
+	go install github.com/knadh/stuffbin/...@latest	
 
 # pack-releases runns stuffbin packing on a given list of
 # binaries. This is used with goreleaser for packing
