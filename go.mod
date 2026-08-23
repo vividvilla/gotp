@@ -1,12 +1,10 @@
 module github.com/vividvilla/gotp
 
-go 1.22
+go 1.23
 
 require (
 	github.com/Masterminds/sprig/v3 v3.2.3
-	github.com/fsnotify/fsnotify v1.4.7
-	github.com/knadh/stuffbin v1.1.0
-	github.com/r3labs/sse v0.0.0-20191119133840-aaec8ab50b85
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/spf13/pflag v1.0.5
 )
 
@@ -21,7 +19,5 @@ require (
 	github.com/shopspring/decimal v1.3.1 // indirect
 	github.com/spf13/cast v1.5.0 // indirect
 	golang.org/x/crypto v0.7.0 // indirect
-	golang.org/x/net v0.8.0 // indirect
-	golang.org/x/sys v0.6.0 // indirect
-	gopkg.in/cenkalti/backoff.v1 v1.1.0 // indirect
+	golang.org/x/sys v0.13.0 // indirect
 )

@@ -1,13 +1,8 @@
-env:
-  - RELEASE_BUILDS=dist/gotp_darwin_amd64/gotp dist/gotp_linux_amd64/gotp dist/gotp_windows_amd64/gotp.exe dist/gotp_linux_arm_6/gotp dist/gotp_linux_arm64/gotp
-
-before:
-  hooks:
-    - make deps
+version: 2
 
 builds:
   - binary: gotp
-    main: ./cmd/main.go
+    main: ./cmd
     goos:
       - darwin
       - linux
@@ -16,15 +11,11 @@ builds:
       - amd64
       - arm
       - arm64
+    ignore:
+      # Windows and macOS do not ship 32-bit ARM builds.
+      - goos: windows
+        goarch: arm
+      - goos: darwin
+        goarch: arm
     ldflags:
       - -s -w -X "main.buildString={{ .Tag }} ({{ .ShortCommit }} {{ .Date }})"
-
-    hooks:
-      # stuff executables with static assets.
-      post: make pack-releases
-
-archives:
-  - format: tar.gz
-    files:
-      - README.md
-      - LICENSE

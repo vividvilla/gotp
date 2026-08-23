@@ -153,12 +153,17 @@
 			top: 10px;
 		}
 		.data-description,
+		.template-source,
 		.discovered-fields {
 			font-family: Arial, sans-serif;
 			background: #efefef;
 			padding: 10px 20px;
 			border-radius: 5px;
 			margin-top: 20px;
+		}
+		.template-source pre {
+			max-height: 300px;
+			font-size: 13px;
 		}
 		.drawer-footer {
 			margin: 20px 0;
@@ -248,15 +253,18 @@
 			<pre>{<br>    "name": "Gopher", <br>    "user_id": "rambo226" <br>}</pre>
 		</div>
 		<div class="discovered-fields">
-			<h4>Auto Discovered fields</h4>
+			<h4>Auto discovered fields</h4>
 			<ul id="discovered-fields-list"></ul>
-			<button class="button" id="submit" onclick="copyTemplateFields()">Copy fields</button>
+			<button class="button" id="copy-fields" onclick="copyTemplateFields()">Copy as JSON data</button>
+		</div>
+		<div class="template-source">
+			<h4>Template source</h4>
+			<pre id="source"></pre>
 		</div>
 		<div class="drawer-footer">
-			<a class="github-button" href="https://github.com/vividvilla/gotp" data-color-scheme="no-preference: light; light: light; dark: dark;" data-size="large" aria-label="Star vividvilla/gotp on GitHub">Star</a>
+			<a href="https://github.com/vividvilla/gotp">github.com/vividvilla/gotp</a>
 		</div>
 	</div>
-	<script async defer src="https://buttons.github.io/buttons.js"></script>
 	<script>
 		// Elements.
 		var drawer = document.querySelector(".drawer");
@@ -264,134 +272,105 @@
 		var drawerMenu = document.querySelector(".drawer-menu");
 		var dataStatus = document.getElementById("data-status");
 		var discoveredFields = document.querySelector("#discovered-fields-list");
-		// Variables.
-		var discoveredFieldsList = [];
+		var sourceView = document.getElementById("source");
+		// Data skeleton built by the server from the discovered fields.
+		var skeleton = {};
 
-		// Subscribe for messages.
-		var source = new EventSource("/events?stream=messages");
-		// Handle messages.
-		source.onmessage = function(event) {
+		// Reload the preview whenever the server reports a change.
+		var source = new EventSource("/events");
+		source.onmessage = function() {
 			document.getElementById("rendered").contentWindow.location.reload();
-			getTemplateFields();
+			refresh();
 		};
 
 		// On textarea input hide data update status.
-		dataInput.addEventListener("input", function(e) {
+		dataInput.addEventListener("input", function() {
 			dataStatus.hidden = true;
 		});
+
+		refresh();
 		getCurrentData();
-		getTemplateFields();
+
+		function refresh() {
+			getTemplateFields();
+			getTemplateSource();
+		}
 
 		// Update template data.
 		function updateData() {
 			try {
 				JSON.parse(dataInput.value);
-			} catch(err) {
-				showdataStatus("Invalid JSON template data", "error");
+			} catch (err) {
+				showDataStatus("Invalid JSON template data", "error");
 				return;
 			}
-			var xhttp = new XMLHttpRequest();
-			xhttp.onreadystatechange = function() {
-				if (this.readyState == 4) {
-					if (this.status === 200) {
-						showdataStatus("Template data updated", "success");
+			fetch("/data", {
+				method: "PUT",
+				headers: { "Content-Type": "application/json" },
+				body: dataInput.value
+			}).then(function (res) {
+				return res.json().then(function (body) {
+					if (res.ok) {
+						showDataStatus("Template data updated", "success");
 						getCurrentData();
 					} else {
-						showdataStatus(xhttp.responseText, "error");
+						showDataStatus(body.error || res.statusText, "error");
 					}
-				}
-			};
-			xhttp.open("PUT", "/data", true);
-			xhttp.setRequestHeader("Content-type", "application/json");
-			xhttp.send(dataInput.value);
-		}
-
-		function displayCurrentData(resp) {
-			var jsonResp = null;
-			try {
-				var jsonResp = JSON.parse(resp);
-			} catch(err) {
-				showdataStatus("Invalid JSON template data", "error");
-				return
-			}
-			if (jsonResp && jsonResp.data) {
-				var data = JSON.stringify(jsonResp.data, null, 2);
-				dataInput.value = data;
-			}
-		}
-
-		function displayTemplateFields(resp) {
-			var jsonResp = null;
-			try {
-				var jsonResp = JSON.parse(resp);
-			} catch(err) {
-				return
-			}
-			if (jsonResp && jsonResp.data) {
-				discoveredFieldsList = jsonResp.data;
-				var fragment = new DocumentFragment();
-				jsonResp.data.forEach(function (field) {
-					var li = document.createElement("li");
-					li.innerHTML = field;
-					fragment.appendChild(li);
-				})
-				discoveredFields.innerHTML = ""
-				discoveredFields.appendChild(fragment)
-			}
-		}
-
-		function copyTemplateFields() {
-			var fieldJSON = {};
-			discoveredFieldsList.forEach(function (field) {
-				fieldJSON[field.replace("{{.", "").replace("}}", "")] = "";
-			})
-			dataInput.value = JSON.stringify(fieldJSON, null, 2);
+				});
+			}).catch(function (err) {
+				showDataStatus(String(err), "error");
+			});
 		}
 
 		function getCurrentData() {
-			var xhttp = new XMLHttpRequest();
-			xhttp.onreadystatechange = function() {
-				if (this.readyState == 4) {
-					if (this.status === 200) {
-						displayCurrentData(xhttp.responseText);
-					} else {
-						displayCurrentData(xhttp.responseText);
-					}
+			fetch("/data").then(function (res) {
+				return res.json();
+			}).then(function (body) {
+				if (body && body.data !== undefined && body.data !== null) {
+					dataInput.value = JSON.stringify(body.data, null, 2);
 				}
-			};
-			xhttp.open("GET", "/data", true);
-			xhttp.send();
+			}).catch(function () {});
 		}
 
 		function getTemplateFields() {
-			var xhttp = new XMLHttpRequest();
-			xhttp.onreadystatechange = function() {
-				if (this.readyState == 4) {
-					if (this.status === 200) {
-						displayTemplateFields(xhttp.responseText);
-					} else {
-						displayTemplateFields(xhttp.responseText);
-					}
+			fetch("/fields").then(function (res) {
+				return res.json();
+			}).then(function (body) {
+				if (!body || !body.data) {
+					return;
 				}
-			};
-			xhttp.open("GET", "/fields", true);
-			xhttp.send();
+				skeleton = body.data.skeleton || {};
+				var fragment = new DocumentFragment();
+				(body.data.fields || []).forEach(function (field) {
+					var li = document.createElement("li");
+					li.textContent = field;
+					fragment.appendChild(li);
+				});
+				discoveredFields.replaceChildren(fragment);
+			}).catch(function () {});
+		}
+
+		function getTemplateSource() {
+			fetch("/source").then(function (res) {
+				return res.text();
+			}).then(function (text) {
+				sourceView.textContent = text;
+			}).catch(function () {});
+		}
+
+		// Replace the data with a skeleton of everything the template reads.
+		function copyTemplateFields() {
+			dataInput.value = JSON.stringify(skeleton, null, 2);
 		}
 
 		function toggeleDrawer() {
-			if (drawerMenu.classList.contains("open")) {
-				drawerMenu.classList.remove("open");
-			} else {
-				drawerMenu.classList.add("open");
-			}
+			drawerMenu.classList.toggle("open");
 			drawer.hidden = !drawer.hidden;
 		}
 
-		function showdataStatus(message, type) {
-			dataStatus.hidden = true;
-			dataStatus.innerHTML = message;
-			dataStatus.classList.remove("success");
-			dataStatus.classList.remove("error");
+		function showDataStatus(message, type) {
+			dataStatus.textContent = message;
+			dataStatus.classList.remove("success", "error");
 			dataStatus.classList.add(type);
 			dataStatus.hidden = false;
 		}
