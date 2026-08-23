@@ -125,9 +125,9 @@ func newServer(s *session) *echo.Echo {
 	e := echo.New()
 	e.HideBanner, e.HidePort = true, true
 
-	e.GET("/", func(c echo.Context) error {
-		return c.HTMLBlob(http.StatusOK, gotp.WebUI)
-	})
+	e.GET("/", asset("index.html", echo.MIMETextHTMLCharsetUTF8))
+	e.GET("/app.js", asset("app.js", "text/javascript; charset=utf-8"))
+	e.GET("/oat.min.css", asset("oat.min.css", "text/css; charset=utf-8"))
 
 	e.GET("/events", s.events)
 
@@ -139,9 +139,6 @@ func newServer(s *session) *echo.Echo {
 			// Errors belong in the preview pane, escaped so that a
 			// message containing markup cannot break the page.
 			return c.HTMLBlob(http.StatusOK, errorPage(err))
-		}
-		if s.in.cfg.Text {
-			return c.Blob(http.StatusOK, echo.MIMETextPlainCharsetUTF8, out)
 		}
 		return c.HTMLBlob(http.StatusOK, out)
 	})
@@ -182,7 +179,7 @@ func newServer(s *session) *echo.Echo {
 
 	// The templates that can be previewed, and which one is current.
 	e.GET("/templates", func(c echo.Context) error {
-		found, err := s.in.candidates()
+		found, err := s.in.previewable()
 		if err != nil {
 			return c.JSON(http.StatusInternalServerError, resp{Error: err.Error()})
 		}
@@ -215,6 +212,17 @@ func newServer(s *session) *echo.Echo {
 	})
 
 	return e
+}
+
+// asset serves one of the embedded UI files.
+func asset(name, contentType string) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		b, err := gotp.WebUI.ReadFile("assets/" + name)
+		if err != nil {
+			return echo.NewHTTPError(http.StatusNotFound, name)
+		}
+		return c.Blob(http.StatusOK, contentType, b)
+	}
 }
 
 // events streams reload notifications to the browser.

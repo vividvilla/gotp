@@ -1,0 +1,71 @@
+<!doctype html>
+<html>
+  <body>
+    <div style='background-color:#F5F5F5;color:#242424;font-family:"Helvetica Neue", "Arial Nova", "Nimbus Sans", Arial, sans-serif;font-size:16px;font-weight:400;letter-spacing:0.15008px;line-height:1.5;margin:0;padding:32px 0;min-height:100%;width:100%'>
+      <table align="center" width="100%" style="margin:0 auto;max-width:600px;background-color:#F5F5F5" role="presentation" cellspacing="0" cellpadding="0" border="0">
+        <tbody>
+          <tr style="width:100%">
+            <td>
+              {{ template "header" . }}
+
+              <div style="background-color:#ffffff;padding:16px 24px 24px 24px">
+                <div style="font-size:14px;font-weight:normal;text-align:left;padding:16px 0px 0px 0px">
+                  Sign in to Golang Studios
+                </div>
+                <h1 style="font-weight:bold;text-align:left;margin:0;font-size:32px;padding:16px 0px 0px 0px">
+                  Your code
+                </h1>
+                <div style="color:#474849;font-size:14px;font-weight:normal;text-align:left;padding:8px 0px 0px 0px">
+                  Enter this code to finish signing in. It expires in {{ .otp.expires_in }}.
+                </div>
+
+                <div style="padding:24px 0px 8px 0px">
+                  <div style='background-color:#F5F5F5;border-radius:5px;font-family:"SF Mono", Menlo, Consolas, monospace;font-size:34px;font-weight:bold;letter-spacing:0.18em;padding:20px 24px;text-align:center'>
+                    {{ .otp.code }}
+                  </div>
+                </div>
+
+                <div style="padding:8px 0px 16px 0px">
+                  <div style="color:#474849;font-size:12px;font-weight:normal;text-align:center">
+                    Never share this code. Golang Studios will not ask you for it.
+                  </div>
+                </div>
+
+                <div style="padding:8px 0px 0px 0px">
+                  <hr style="width:100%;border:none;border-top:1px solid #EEEEEE;margin:0" />
+                </div>
+                <div style="color:#474849;font-size:12px;font-weight:normal;text-align:left;padding:16px 0px 0px 0px">
+                  Did not ask for this? <a href="{{ .url }}" style="color:#242424" target="_blank">Secure your account</a>
+                  &#8212; the code is useless on its own.
+                </div>
+              </div>
+
+              <div style="height:24px"></div>
+
+              {{ with .otp.request }}
+              <div style="background-color:#ffffff;padding:16px 24px 24px 24px">
+                <h3 style="font-weight:normal;text-align:left;margin:0;font-size:20px;padding:16px 0px 16px 0px">
+                  Where this came from
+                </h3>
+                <div style="font-size:14px">
+                  <div style="display:flex;justify-content:space-between;gap:12px;padding:8px 0px">
+                    <span style="color:#474849">Device</span><span>{{ .device }}</span>
+                  </div>
+                  <div style="display:flex;justify-content:space-between;gap:12px;padding:8px 0px">
+                    <span style="color:#474849">Location</span><span>{{ .location }}</span>
+                  </div>
+                  <div style="display:flex;justify-content:space-between;gap:12px;padding:8px 0px">
+                    <span style="color:#474849">Requested</span><span>{{ .at }}</span>
+                  </div>
+                </div>
+              </div>
+              {{ end }}
+
+              {{ template "footer" . }}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </body>
+</html>

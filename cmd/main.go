@@ -401,6 +401,23 @@ func (in *input) candidates() ([]string, error) {
 	return out, nil
 }
 
+// previewable narrows the candidates to the templates that render something of
+// their own, which are the only ones worth offering as a preview: a file made
+// up of {{ define }} blocks shows a blank page.
+func (in *input) previewable() ([]string, error) {
+	found, err := in.candidates()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(found))
+	for _, p := range found {
+		if t, err := in.template(p); err == nil && t.HasBody() {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
 // parsePaths returns the globs parsed alongside the entry. Patterns generated
 // for a directory are dropped when they match nothing, while a pattern the
 // user typed is left in so that a typo is reported rather than ignored.

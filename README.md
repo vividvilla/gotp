@@ -113,26 +113,33 @@ gotp fields page.tmpl base-*.tmpl > /dev/null
 
 ## Example
 
-`example/` is a receipt email, split the way real template sets are:
+`example/` is two emails over one set of partials, the way real template sets
+are built:
 
 ```txt
-example/receipt.tmpl       the email being previewed
+example/receipt.tmpl       a receipt: range, a conditional inside it, printf
+example/otp.tmpl           a sign-in code: with, a nested scope
 example/base-header.tmpl   {{ define "header" }}, the logo and sign-in button
 example/base-rows.tmpl     {{ define "details" }} and {{ define "totals" }}
 example/base-footer.tmpl   {{ define "footer" }}
-example/data.json          data for all of it
+example/data.json          data for both
 ```
 
+The two emails share the header and footer and read different parts of the same
+data file, which is what `serve` on the directory is for: the picker switches
+between them and the panel re-reads the fields for whichever one is showing.
+
 ```bash
-# Render it. The partials can be named in any order, or not at all beyond
-# the glob, since only receipt.tmpl renders anything by itself.
+# Render one. The partials can be named in any order, since neither of them
+# renders anything by itself.
 gotp --text example/receipt.tmpl example/base-*.tmpl -d @example/data.json
 
-# Preview it live, with a picker for the four templates.
+# Preview live, with a picker to switch between the two emails.
 gotp serve example/ --text -d @example/data.json --open
 
-# What data does it need? The answer matches example/data.json exactly.
+# What data does each one need? Both are covered by example/data.json.
 gotp fields example/receipt.tmpl example/base-*.tmpl
+gotp fields example/otp.tmpl example/base-*.tmpl
 ```
 
 The logo is an inline SVG rather than an `<img>`, so the example renders
@@ -142,10 +149,36 @@ Note the `--text`: this one needs it. Email HTML uses conditional comments like
 `<!--[if mso]>` to reach Outlook, and `html/template` **elides comments**, so the
 default mode would quietly drop them. It is worth knowing for any HTML email.
 
-The field list shows what the discovery handles: `.items[].detail` is read inside
-an `{{ if }}` inside a `{{ range }}`, and `.receipt.total` is read inside a
-partial that is called as `{{ template "totals" .receipt }}`, so it is reported
-against that scope rather than the root.
+The field lists show what the discovery handles. In the receipt,
+`.items[].detail` is read inside an `{{ if }}` inside a `{{ range }}`, and
+`.receipt.total` is read inside a partial called as
+`{{ template "totals" .receipt }}`, so it is reported against that scope rather
+than the root. In the OTP email, `.otp.request.device` is read inside a
+`{{ with }}`, and the same scoping applies — which is how you catch the classic
+mistake of writing `{{ .url }}` inside a `with` and silently reading
+`.otp.request.url`.
+
+## The web UI
+
+`gotp serve` opens a two-pane page: the rendered template on the left, its data
+on the right.
+
+- **Left toolbar** — the template picker (when a directory is served), a
+  Preview/Source pair, and a width toggle that constrains the preview to 390px
+  so you can check a mobile layout. The readout shows the width being rendered.
+- **Right panel** — the data, either as a flat list of one row per field path or
+  as raw JSON. The list is built by reconciling what the template reads against
+  what the data has, so a field the template reads and the data lacks is marked
+  **unset**. Editing a value keeps its JSON type, and applying patches the data
+  you gave rather than replacing it, so keys the template never reads survive.
+- **No data yet?** The panel offers to fill in a skeleton of everything the
+  template reads — the same thing `gotp fields --json` prints.
+- The theme follows the operating system, with a switch in the top bar.
+
+The page is styled with [oat](https://github.com/knadh/oat) (MIT), vendored into
+`assets/` and embedded in the binary along with the rest of the UI: `gotp serve`
+makes no outbound request, so it works with no network. Because the rendered
+template loads in an iframe, none of the UI's own CSS can reach it.
 
 ## Serving a directory
 
@@ -189,3 +222,7 @@ scope that cannot be resolved statically is marked with a `*` segment.
 make check   # go vet + go test -race
 make build   # build ./gotp
 ```
+
+The web UI lives in `assets/` (`index.html`, `app.js`, and a vendored copy of
+oat) and is embedded with `go:embed`, so a rebuild is all that is needed after
+changing it.

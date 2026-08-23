@@ -3,7 +3,7 @@ package gotp
 
 import (
 	"bytes"
-	_ "embed"
+	"embed"
 	"fmt"
 	htmltmpl "html/template"
 	"io"
@@ -18,10 +18,10 @@ import (
 	"github.com/Masterminds/sprig/v3"
 )
 
-// WebUI is the single page served by the web mode.
+// WebUI holds the page and assets served by the web mode.
 //
-//go:embed assets/index.html
-var WebUI []byte
+//go:embed assets/index.html assets/app.js assets/oat.min.css
+var WebUI embed.FS
 
 // Config controls how templates are parsed and rendered.
 type Config struct {

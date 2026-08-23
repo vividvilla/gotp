@@ -276,8 +276,15 @@ func TestMissingTemplateFile(t *testing.T) {
 }
 
 func TestWebUIEmbedded(t *testing.T) {
-	if len(WebUI) == 0 {
-		t.Fatal("web UI was not embedded")
+	for _, name := range []string{"assets/index.html", "assets/app.js", "assets/oat.min.css"} {
+		b, err := WebUI.ReadFile(name)
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		if len(b) == 0 {
+			t.Errorf("%s is empty", name)
+		}
 	}
 }
 

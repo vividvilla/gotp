@@ -21,5 +21,14 @@
       "name": "Extra storage",
       "amount": 10.0
     }
-  ]
+  ],
+  "otp": {
+    "code": "418 902",
+    "expires_in": "10 minutes",
+    "request": {
+      "device": "Firefox 141 on Linux",
+      "location": "Bengaluru, India",
+      "at": "24 Aug 2026 at 01:12 IST"
+    }
+  }
 }

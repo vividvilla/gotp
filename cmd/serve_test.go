@@ -73,8 +73,26 @@ func TestHandlers(t *testing.T) {
 		if ct := res.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
 			t.Errorf("Content-Type = %q", ct)
 		}
-		if !strings.Contains(body, "<!DOCTYPE html>") {
+		if !strings.Contains(body, "<!doctype html>") {
 			t.Error("index page not served")
+		}
+	})
+
+	t.Run("ui assets", func(t *testing.T) {
+		for _, tc := range []struct{ path, contentType, needle string }{
+			{"/app.js", "text/javascript", "renderRows"},
+			{"/oat.min.css", "text/css", "--foreground"},
+		} {
+			res, body := get(t, srv.URL+tc.path)
+			if res.StatusCode != http.StatusOK {
+				t.Errorf("%s: status %d", tc.path, res.StatusCode)
+			}
+			if ct := res.Header.Get("Content-Type"); !strings.HasPrefix(ct, tc.contentType) {
+				t.Errorf("%s: Content-Type = %q", tc.path, ct)
+			}
+			if !strings.Contains(body, tc.needle) {
+				t.Errorf("%s: body does not contain %q", tc.path, tc.needle)
+			}
 		}
 	})
 
@@ -158,14 +176,16 @@ func TestOutRendersErrorsEscaped(t *testing.T) {
 	}
 }
 
+// --text selects the template engine, not how the preview is delivered: the
+// browser pane renders HTML either way, and only the escaping differs.
 func TestOutServesTextMode(t *testing.T) {
 	srv, _ := fileSession(t, `{{ .v }}`, gotp.Config{Text: true}, map[string]any{"v": "a & b"})
 	res, body := get(t, srv.URL+"/out")
-	if ct := res.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+	if ct := res.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
 		t.Errorf("Content-Type = %q", ct)
 	}
 	if body != "a & b" {
-		t.Errorf("body = %q", body)
+		t.Errorf("body = %q, want it unescaped by the text engine", body)
 	}
 }
 
@@ -202,7 +222,7 @@ func TestServeDirectory(t *testing.T) {
 		t.Errorf("out = %q", body)
 	}
 
-	t.Run("templates lists all of them", func(t *testing.T) {
+	t.Run("templates lists only what can be previewed", func(t *testing.T) {
 		_, body := get(t, srv.URL+"/templates")
 		var resp struct {
 			Data struct {
@@ -213,8 +233,15 @@ func TestServeDirectory(t *testing.T) {
 		if err := json.Unmarshal([]byte(body), &resp); err != nil {
 			t.Fatal(err)
 		}
-		if len(resp.Data.Templates) != 3 {
-			t.Errorf("templates = %q", resp.Data.Templates)
+		// _part.tmpl only defines templates, so offering it would give a
+		// blank preview.
+		if len(resp.Data.Templates) != 2 {
+			t.Errorf("templates = %q, want alpha and beta only", resp.Data.Templates)
+		}
+		for _, p := range resp.Data.Templates {
+			if filepath.Base(p) == "_part.tmpl" {
+				t.Errorf("a define-only partial was offered: %q", resp.Data.Templates)
+			}
 		}
 		if resp.Data.Entry != in.entry {
 			t.Errorf("entry = %q", resp.Data.Entry)
