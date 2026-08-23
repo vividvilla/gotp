@@ -1,0 +1,84 @@
+{{/*
+  Both of these are called with the receipt rather than the whole payload, so
+  the fields they read are ".receipt.number" and friends. "gotp fields" follows
+  the include and reports them with that scope.
+*/}}
+
+{{ define "details" }}
+<div style="padding:8px 0px 8px 0px">
+  <table align="center" width="100%" cellpadding="0" border="0" style="table-layout:fixed;border-collapse:collapse">
+    <tbody style="width:100%">
+      <tr style="width:100%">
+        <td style="box-sizing:content-box;vertical-align:middle;padding-left:0;padding-right:0">
+          <div style="color:#474849;font-size:14px;font-weight:normal;text-align:left">Receipt number</div>
+        </td>
+        <td style="box-sizing:content-box;vertical-align:middle;padding-left:0;padding-right:0">
+          <div style="font-size:14px;font-weight:normal;text-align:right">{{ .number }}</div>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+<div style="padding:8px 0px 8px 0px">
+  <table align="center" width="100%" cellpadding="0" border="0" style="table-layout:fixed;border-collapse:collapse">
+    <tbody style="width:100%">
+      <tr style="width:100%">
+        <td style="box-sizing:content-box;vertical-align:middle;padding-left:0;padding-right:0">
+          <div style="color:#474849;font-size:14px;font-weight:normal;text-align:left">Invoice number</div>
+        </td>
+        <td style="box-sizing:content-box;vertical-align:middle;padding-left:0;padding-right:0">
+          <div style="font-size:14px;font-weight:normal;text-align:right">{{ .invoice_number }}</div>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+<div style="padding:8px 0px 8px 0px">
+  <table align="center" width="100%" cellpadding="0" border="0" style="table-layout:fixed;border-collapse:collapse">
+    <tbody style="width:100%">
+      <tr style="width:100%">
+        <td style="box-sizing:content-box;vertical-align:middle;padding-left:0;padding-right:0">
+          <div style="color:#474849;font-size:14px;font-weight:normal;text-align:left">Payment method</div>
+        </td>
+        <td style="box-sizing:content-box;vertical-align:middle;padding-left:0;padding-right:0">
+          <div style="font-size:14px;font-weight:normal;text-align:right">{{ .payment_method }}</div>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+{{ end }}
+
+{{ define "totals" }}
+<div style="padding:8px 0px 8px 0px">
+  <table align="center" width="100%" cellpadding="0" border="0" style="table-layout:fixed;border-collapse:collapse">
+    <tbody style="width:100%">
+      <tr style="width:100%">
+        <td style="box-sizing:content-box;vertical-align:middle;padding-left:0;padding-right:0">
+          <div style="font-size:14px;font-weight:bold;text-align:left">Total</div>
+        </td>
+        <td style="box-sizing:content-box;vertical-align:middle;padding-left:0;padding-right:0">
+          <div style="font-size:14px;font-weight:bold;text-align:right">{{ printf "$%.2f" .total }}</div>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+<div style="padding:8px 0px 8px 0px">
+  <hr style="width:100%;border:none;border-top:1px solid #EEEEEE;margin:0" />
+</div>
+<div style="padding:8px 0px 8px 0px">
+  <table align="center" width="100%" cellpadding="0" border="0" style="table-layout:fixed;border-collapse:collapse">
+    <tbody style="width:100%">
+      <tr style="width:100%">
+        <td style="box-sizing:content-box;vertical-align:middle;padding-left:0;padding-right:0">
+          <div style="font-size:14px;font-weight:bold;text-align:left">Amount paid</div>
+        </td>
+        <td style="box-sizing:content-box;vertical-align:middle;padding-left:0;padding-right:0">
+          <div style="font-size:14px;font-weight:bold;text-align:right">{{ printf "$%.2f" .amount_paid }}</div>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+{{ end }}

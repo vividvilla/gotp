@@ -378,6 +378,80 @@ func TestStrictFlag(t *testing.T) {
 	}
 }
 
+// resolveVia drives the real argument resolution, which is where a directory
+// argument is turned into a template set.
+func resolveVia(t *testing.T, allowDir bool, args ...string) (*input, error) {
+	t.Helper()
+	var got *input
+	var gotErr error
+	root := &cli.Command{
+		Name:  "gotp",
+		Flags: commonFlags(),
+		Action: func(_ context.Context, c *cli.Command) error {
+			got, gotErr = resolveInput(c, allowDir)
+			return nil
+		},
+	}
+	if err := root.Run(context.Background(), append([]string{"gotp"}, args...)); err != nil {
+		t.Fatal(err)
+	}
+	return got, gotErr
+}
+
+// Serving a directory must not put the directory itself in the parse list: a
+// glob matches it, parsing it as a template fails, and every candidate entry
+// then looks broken.
+func TestResolveDirectory(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "base-footer.tmpl", `{{ define "footer" }}foot{{ end }}`)
+	write(t, dir, "base-header.tmpl", `{{ define "header" }}head{{ end }}`)
+	write(t, dir, "receipt.tmpl", `{{ template "header" . }}|{{ template "footer" . }}`)
+
+	in, err := resolveVia(t, true, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(in.entry) != "receipt.tmpl" {
+		t.Errorf("entry = %q, want receipt.tmpl", in.entry)
+	}
+	for _, p := range in.parsePaths() {
+		if p == dir || p == dir+string(filepath.Separator) {
+			t.Errorf("the directory itself is in the parse list: %q", in.parsePaths())
+		}
+	}
+
+	// The entry it chose has to actually render.
+	tmpl, err := in.template(in.entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := tmpl.Render(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != "head|foot" {
+		t.Errorf("rendered %q", out)
+	}
+
+	// A trailing separator is the way a shell completes a directory.
+	in, err = resolveVia(t, true, dir+string(filepath.Separator))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(in.entry) != "receipt.tmpl" {
+		t.Errorf("trailing separator: entry = %q", in.entry)
+	}
+}
+
+// A directory of templates that do not parse is an error, not a blank preview.
+func TestResolveDirectoryAllBroken(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "a.tmpl", `{{ if .x }}`)
+	if _, err := resolveVia(t, true, dir); err == nil {
+		t.Fatal("expected the parse error to be reported")
+	}
+}
+
 func TestPickDirEntry(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -431,7 +505,11 @@ func TestPickDirEntry(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := pickDirEntry(in, found); filepath.Base(got) != tc.want {
+			got, err := pickDirEntry(in, found)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if filepath.Base(got) != tc.want {
 				t.Errorf("got %q, want %q", filepath.Base(got), tc.want)
 			}
 		})

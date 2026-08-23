@@ -186,7 +186,11 @@ func TestServeDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	in.entry = pickDirEntry(in, found)
+	entry, err := pickDirEntry(in, found)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.entry = entry
 	srv, s := testSession(t, in, nil)
 
 	// The partial renders nothing, so it is skipped when choosing what to

@@ -93,35 +93,40 @@ read the template from stdin. render is the default: "gotp page.tmpl" renders it
 		EnableShellCompletion: true,
 		// Flags declared here are available to every command, so that
 		// they work with or without an explicit command name.
-		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:      "data",
-				Aliases:   []string{"d"},
-				Usage:     "template data: inline `JSON`, @file.json, or @- for stdin",
-				TakesFile: true,
-			},
-			&cli.BoolFlag{
-				Name:  "stdin",
-				Usage: "read the template from stdin; \"-\" as the template means the same",
-			},
-			&cli.BoolFlag{
-				Name:  "text",
-				Usage: "render as plain text, without HTML escaping",
-			},
-			&cli.BoolFlag{
-				Name:  "sprig",
-				Usage: "register the sprig function library",
-			},
-			&cli.BoolFlag{
-				Name:  "stub-funcs",
-				Usage: "stub out undefined functions instead of failing",
-			},
-			&cli.BoolFlag{
-				Name:  "strict",
-				Usage: "fail on data the template reads but does not have",
-			},
-		},
+		Flags:    commonFlags(),
 		Commands: []*cli.Command{renderCmd(), serveCmd(), fieldsCmd()},
+	}
+}
+
+// commonFlags are the flags every command accepts.
+func commonFlags() []cli.Flag {
+	return []cli.Flag{
+		&cli.StringFlag{
+			Name:      "data",
+			Aliases:   []string{"d"},
+			Usage:     "template data: inline `JSON`, @file.json, or @- for stdin",
+			TakesFile: true,
+		},
+		&cli.BoolFlag{
+			Name:  "stdin",
+			Usage: "read the template from stdin; \"-\" as the template means the same",
+		},
+		&cli.BoolFlag{
+			Name:  "text",
+			Usage: "render as plain text, without HTML escaping",
+		},
+		&cli.BoolFlag{
+			Name:  "sprig",
+			Usage: "register the sprig function library",
+		},
+		&cli.BoolFlag{
+			Name:  "stub-funcs",
+			Usage: "stub out undefined functions instead of failing",
+		},
+		&cli.BoolFlag{
+			Name:  "strict",
+			Usage: "fail on data the template reads but does not have",
+		},
 	}
 }
 
@@ -287,6 +292,9 @@ func resolveInput(c *cli.Command, allowDir bool) (*input, error) {
 			return nil, fail("%s is a directory, %s needs a template file", target, c.Name)
 		}
 		in.dir = target
+		// The directory itself is not a template: what is parsed are
+		// the templates inside it, plus any further arguments.
+		in.args = args[1:]
 		found, err := in.candidates()
 		if err != nil {
 			return nil, err
@@ -294,7 +302,11 @@ func resolveInput(c *cli.Command, allowDir bool) (*input, error) {
 		if len(found) == 0 {
 			return nil, fail("no templates (%s) in %s", strings.Join(templateExts, ", "), target)
 		}
-		in.entry = pickDirEntry(in, found)
+		entry, err := pickDirEntry(in, found)
+		if err != nil {
+			return nil, err
+		}
+		in.entry = entry
 		return in, nil
 	}
 
@@ -336,7 +348,7 @@ func (in *input) chooseEntry(c *cli.Command) error {
 // pickDirEntry chooses which template of a served directory to preview first:
 // an index template if there is one, otherwise the first that renders
 // something of its own. The web UI can switch to any of the others.
-func pickDirEntry(in *input, found []string) string {
+func pickDirEntry(in *input, found []string) (string, error) {
 	ordered := make([]string, 0, len(found))
 	for _, p := range found {
 		if strings.HasPrefix(filepath.Base(p), "index.") {
@@ -348,12 +360,27 @@ func pickDirEntry(in *input, found []string) string {
 			ordered = append(ordered, p)
 		}
 	}
+
+	var firstErr error
 	for _, p := range ordered {
-		if t, err := in.template(p); err == nil && t.HasBody() {
-			return p
+		t, err := in.template(p)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if t.HasBody() {
+			return p, nil
 		}
 	}
-	return found[0]
+
+	// Nothing rendered. If that is because none of them even parsed, say
+	// so rather than serving a blank page.
+	if firstErr != nil {
+		return "", fail("%v", firstErr)
+	}
+	return found[0], nil
 }
 
 // candidates lists the templates that may be previewed, sorted. It globs on

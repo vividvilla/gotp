@@ -111,6 +111,42 @@ gotp serve templates/ --addr 9000
 gotp fields page.tmpl base-*.tmpl > /dev/null
 ```
 
+## Example
+
+`example/` is a receipt email, split the way real template sets are:
+
+```txt
+example/receipt.tmpl       the email being previewed
+example/base-header.tmpl   {{ define "header" }}, the logo and sign-in button
+example/base-rows.tmpl     {{ define "details" }} and {{ define "totals" }}
+example/base-footer.tmpl   {{ define "footer" }}
+example/data.json          data for all of it
+```
+
+```bash
+# Render it. The partials can be named in any order, or not at all beyond
+# the glob, since only receipt.tmpl renders anything by itself.
+gotp --text example/receipt.tmpl example/base-*.tmpl -d @example/data.json
+
+# Preview it live, with a picker for the four templates.
+gotp serve example/ --text -d @example/data.json --open
+
+# What data does it need? The answer matches example/data.json exactly.
+gotp fields example/receipt.tmpl example/base-*.tmpl
+```
+
+The logo is an inline SVG rather than an `<img>`, so the example renders
+identically with no network access.
+
+Note the `--text`: this one needs it. Email HTML uses conditional comments like
+`<!--[if mso]>` to reach Outlook, and `html/template` **elides comments**, so the
+default mode would quietly drop them. It is worth knowing for any HTML email.
+
+The field list shows what the discovery handles: `.items[].detail` is read inside
+an `{{ if }}` inside a `{{ range }}`, and `.receipt.total` is read inside a
+partial that is called as `{{ template "totals" .receipt }}`, so it is reported
+against that scope rather than the root.
+
 ## Serving a directory
 
 `gotp serve <directory>` parses every `.tmpl`, `.tpl`, `.gohtml` and `.html`
