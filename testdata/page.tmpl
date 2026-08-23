@@ -1,0 +1,4 @@
+{{ template "header" . }}
+<p>Hi {{ .user.name }}</p>
+{{ range .posts }}<a href="{{ .url }}">{{ .title }}</a>{{ end }}
+{{ template "footer" .meta }}
