@@ -129,6 +129,13 @@
 			width: 0%;
 			left: 50%;
 		}
+		#template-picker {
+			display: block;
+			width: 100%;
+			margin-bottom: 10px;
+			font-family: inherit;
+			font-size: 16px;
+		}
 		#submit {
 			margin-top: 10px;
 			font-size: 16px;
@@ -242,6 +249,7 @@
 			</g>
 			</svg>
 		</div>
+		<select id="template-picker" hidden></select>
 		<textarea id="data" name="data" rows="10" placeholder="JSON data here"></textarea>
 		<button class="button" id="submit" onclick="updateData()">Render</button>
 		<div id="data-status" class="block" hidden></div>
@@ -273,6 +281,7 @@
 		var dataStatus = document.getElementById("data-status");
 		var discoveredFields = document.querySelector("#discovered-fields-list");
 		var sourceView = document.getElementById("source");
+		var picker = document.getElementById("template-picker");
 		// Data skeleton built by the server from the discovered fields.
 		var skeleton = {};
 
@@ -294,7 +303,43 @@
 		function refresh() {
 			getTemplateFields();
 			getTemplateSource();
+			getTemplates();
 		}
+
+		// The template being previewed, when a directory is served.
+		function getTemplates() {
+			fetch("/templates").then(function (res) {
+				return res.json();
+			}).then(function (body) {
+				if (!body || !body.data) {
+					return;
+				}
+				var list = body.data.templates || [];
+				picker.hidden = list.length < 2;
+				if (picker.hidden) {
+					return;
+				}
+				var fragment = new DocumentFragment();
+				list.forEach(function (path) {
+					var option = document.createElement("option");
+					option.value = path;
+					option.textContent = path.split("/").pop();
+					option.selected = path === body.data.entry;
+					fragment.appendChild(option);
+				});
+				picker.replaceChildren(fragment);
+			}).catch(function () {});
+		}
+
+		// Switching the template publishes a reload, so the preview and the
+		// panels update through the event stream.
+		picker.addEventListener("change", function () {
+			fetch("/entry", {
+				method: "PUT",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ entry: picker.value })
+			}).catch(function () {});
+		});
 
 		// Update template data.
 		function updateData() {

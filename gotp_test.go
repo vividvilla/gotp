@@ -2,10 +2,33 @@ package gotp
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+// templateSet writes a small template set on disk, for the cases that need real
+// files because base templates are loaded by glob. It returns the directory,
+// the entry template and the glob matching its base templates.
+func templateSet(t *testing.T) (dir, page, bases string) {
+	t.Helper()
+	dir = t.TempDir()
+	for name, body := range map[string]string{
+		"page.tmpl": `{{ template "header" . }}
+<p>Hi {{ .user.name }}</p>
+{{ range .posts }}<a href="{{ .url }}">{{ .title }}</a>{{ end }}
+{{ template "footer" .meta }}`,
+		"base-header.tmpl": `{{ define "header" }}<h1>{{ .site.title }}</h1>{{ end }}`,
+		"base-footer.tmpl": `{{ define "footer" }}<p>{{ .year }}</p>{{ end }}`,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir, filepath.Join(dir, "page.tmpl"), filepath.Join(dir, "base-*.tmpl")
+}
 
 // fields parses src and returns the discovered fields.
 func fields(t *testing.T, cfg Config, src string) []string {
@@ -64,7 +87,8 @@ func TestFields(t *testing.T) {
 }
 
 func TestFieldsFollowsBaseTemplates(t *testing.T) {
-	tmpl, err := New(Config{}, "testdata/page.tmpl", nil, []string{"testdata/base-*.tmpl"})
+	_, page, bases := templateSet(t)
+	tmpl, err := New(Config{}, page, nil, []string{bases})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +251,8 @@ func TestSprig(t *testing.T) {
 }
 
 func TestCompileUsesBaseTemplates(t *testing.T) {
-	out, err := Compile(Config{}, "testdata/page.tmpl", []string{"testdata/base-*.tmpl"},
+	_, page, bases := templateSet(t)
+	out, err := Compile(Config{}, page, []string{bases},
 		map[string]any{
 			"site": map[string]any{"title": "Site"},
 			"user": map[string]any{"name": "Gopher"},
@@ -244,7 +269,8 @@ func TestCompileUsesBaseTemplates(t *testing.T) {
 }
 
 func TestMissingTemplateFile(t *testing.T) {
-	if _, err := Compile(Config{}, "testdata/nope.tmpl", nil, nil); err == nil {
+	missing := filepath.Join(t.TempDir(), "nope.tmpl")
+	if _, err := Compile(Config{}, missing, nil, nil); err == nil {
 		t.Fatal("expected an error for a missing file")
 	}
 }
@@ -252,5 +278,45 @@ func TestMissingTemplateFile(t *testing.T) {
 func TestWebUIEmbedded(t *testing.T) {
 	if len(WebUI) == 0 {
 		t.Fatal("web UI was not embedded")
+	}
+}
+
+func TestStrict(t *testing.T) {
+	const src = `id: {{ .user_id }}`
+	data := map[string]any{"name": "Gopher"}
+
+	out, err := CompileString(Config{Text: true}, src, nil, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(out); got != "id: <no value>" {
+		t.Errorf("default: got %q", got)
+	}
+
+	if _, err := CompileString(Config{Text: true, Strict: true}, src, nil, data); err == nil {
+		t.Error("strict: expected an error for the missing key")
+	}
+}
+
+func TestHasBody(t *testing.T) {
+	tests := map[string]bool{
+		`{{ define "footer" }}<p>{{ .year }}</p>{{ end }}`:     false,
+		"\n{{ define \"a\" }}x{{ end }}\n\n":                   false,
+		`{{ define "a" }}x{{ end }}{{ define "b" }}y{{ end }}`: false,
+		``:                          false,
+		"  \n ":                     false,
+		`hello`:                     true,
+		`{{ .x }}`:                  true,
+		`{{ template "footer" . }}`: true,
+		`{{ define "a" }}x{{ end }}{{ template "a" . }}`: true,
+	}
+	for src, want := range tests {
+		tmpl, err := New(Config{}, "t", []byte(src), nil)
+		if err != nil {
+			t.Fatalf("%q: %v", src, err)
+		}
+		if got := tmpl.HasBody(); got != want {
+			t.Errorf("HasBody(%q) = %v, want %v", src, got, want)
+		}
 	}
 }

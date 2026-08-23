@@ -30,6 +30,10 @@ type Config struct {
 	// Text renders with text/template instead of html/template, so values
 	// are not HTML-escaped. Use it for plain text, YAML, SQL and the like.
 	Text bool
+	// Strict fails rendering when the template reads a key the data does
+	// not have, instead of rendering "<no value>". Note that this also
+	// fails on "{{ if .maybe }}" tests for optional keys.
+	Strict bool
 	// StubFuncs registers a placeholder for every function the template
 	// calls but that is not defined, so app-specific functions do not stop
 	// the preview. A stub returns its first argument if given one (keeping
@@ -99,8 +103,15 @@ func (t *Template) parse(cfg Config, name, src string, basePaths []string, stubs
 		funcs[k] = v
 	}
 
+	// missingkey only has an effect on map lookups, which is what JSON
+	// template data is made of.
+	opt := "missingkey=default"
+	if cfg.Strict {
+		opt = "missingkey=error"
+	}
+
 	if cfg.Text {
-		tt := texttmpl.New(name).Funcs(funcs)
+		tt := texttmpl.New(name).Funcs(funcs).Option(opt)
 		for _, b := range basePaths {
 			if _, err := tt.ParseGlob(b); err != nil {
 				return err
@@ -115,7 +126,7 @@ func (t *Template) parse(cfg Config, name, src string, basePaths []string, stubs
 		return nil
 	}
 
-	ht := htmltmpl.New(name).Funcs(funcs)
+	ht := htmltmpl.New(name).Funcs(funcs).Option(opt)
 	for _, b := range basePaths {
 		if _, err := ht.ParseGlob(b); err != nil {
 			return err
@@ -184,6 +195,24 @@ func (t *Template) treeByName(name string) *parse.Tree {
 		return a.Tree
 	}
 	return nil
+}
+
+// HasBody reports whether the template renders anything of its own. A file
+// holding only {{ define }} blocks does not: the blocks become separate
+// templates for others to include, leaving this one with nothing but the
+// whitespace around them.
+func (t *Template) HasBody() bool {
+	tree := t.root()
+	if tree == nil || tree.Root == nil {
+		return false
+	}
+	for _, n := range tree.Root.Nodes {
+		if txt, ok := n.(*parse.TextNode); ok && len(bytes.TrimSpace(txt.Text)) == 0 {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // Fields returns every data field the template reads, as dotted paths sorted

@@ -1,69 +1,456 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
+	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
-	"sync"
 	"testing"
 
-	"github.com/vividvilla/gotp"
-	"time"
+	"github.com/urfave/cli/v3"
 )
 
-func TestParseFlags(t *testing.T) {
-	opts, data, err := parseFlags([]string{"--text", "--stub-funcs", "-b", "base.tmpl", "-d", `{"a":1}`, "x.tmpl"})
+func TestMain(m *testing.M) {
+	// Errors built with cli.Exit would otherwise end the test binary, and
+	// the framework reports them on its own writer.
+	cli.OsExiter = func(int) {}
+	cli.ErrWriter = io.Discard
+	os.Exit(m.Run())
+}
+
+// runStreams executes the CLI and returns its output and error streams
+// separately, so that a test can tell which one something was written to.
+func runStreams(t *testing.T, stdin string, args ...string) (string, string, error) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	root := rootCmd()
+	root.Writer = &out
+	root.ErrWriter = &errOut
+	root.Reader = strings.NewReader(stdin)
+	err := root.Run(context.Background(), rewriteStdinArg(append([]string{"gotp"}, args...)))
+	return out.String(), errOut.String(), err
+}
+
+// run executes the CLI and returns what it wrote to its output stream.
+func run(t *testing.T, stdin string, args ...string) (string, error) {
+	t.Helper()
+	out, _, err := runStreams(t, stdin, args...)
+	return out, err
+}
+
+// write puts a template in dir and returns its path.
+func write(t *testing.T, dir, name, body string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// tmpl writes a template into a temporary directory and returns its path.
+func tmpl(t *testing.T, name, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestRender(t *testing.T) {
+	page := tmpl(t, "page.tmpl", `Hi {{ .name }}`)
+
+	// No verb: render is the default command.
+	got, err := run(t, "", page, "-d", `{"name":"Gopher"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opts.tmplPath != "x.tmpl" {
-		t.Errorf("tmplPath = %q", opts.tmplPath)
+	if got != "Hi Gopher" {
+		t.Errorf("got %q", got)
 	}
-	if !opts.gotpCfg.Text || !opts.gotpCfg.StubFuncs {
-		t.Errorf("cfg = %+v", opts.gotpCfg)
+
+	// The explicit verb does the same.
+	got, err = run(t, "", "render", page, "-d", `{"name":"Gopher"}`)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(opts.basePaths) != 1 || opts.basePaths[0] != "base.tmpl" {
-		t.Errorf("basePaths = %q", opts.basePaths)
-	}
-	if m, ok := data.(map[string]any); !ok || m["a"] != 1.0 {
-		t.Errorf("data = %#v", data)
-	}
-	// The server should not be reachable from the network by default.
-	if !strings.HasPrefix(opts.addr, "127.0.0.1") {
-		t.Errorf("addr = %q, want a loopback default", opts.addr)
+	if got != "Hi Gopher" {
+		t.Errorf("explicit verb: got %q", got)
 	}
 }
 
-func TestParseFlagsErrors(t *testing.T) {
+func TestRenderNoTrailingNewline(t *testing.T) {
+	got, err := run(t, "", tmpl(t, "p.tmpl", `no-newline`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "no-newline" {
+		t.Errorf("got %q, want no added newline", got)
+	}
+}
+
+func TestEscapingModes(t *testing.T) {
+	page := tmpl(t, "p.tmpl", `{{ .v }}`)
+	data := `{"v":"Tom & Jerry <b>"}`
+
+	got, err := run(t, "", page, "-d", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "Tom &amp; Jerry &lt;b&gt;" {
+		t.Errorf("html: got %q", got)
+	}
+
+	got, err = run(t, "", page, "-d", data, "--text")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "Tom & Jerry <b>" {
+		t.Errorf("text: got %q", got)
+	}
+}
+
+func TestFields(t *testing.T) {
+	page := tmpl(t, "p.tmpl", `{{ .a }}{{ range .items }}{{ .name }}{{ end }}`)
+
+	got, err := run(t, "", "fields", page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := ".a\n.items\n.items[].name\n"
+	if got != want {
+		t.Errorf("fields: got %q, want %q", got, want)
+	}
+
+	// --json turns the same list into a data skeleton.
+	got, err = run(t, "", "fields", "--json", page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var skeleton map[string]any
+	if err := json.Unmarshal([]byte(got), &skeleton); err != nil {
+		t.Fatalf("--json output is not JSON: %v: %s", err, got)
+	}
+	if _, ok := skeleton["items"].([]any); !ok {
+		t.Errorf("--json: got %s", got)
+	}
+	if _, ok := skeleton["a"].(string); !ok {
+		t.Errorf("--json: got %s", got)
+	}
+
+	// The flag belongs to fields, not to rendering.
+	if _, err := run(t, "", page, "--json"); err == nil {
+		t.Error("--json should not be accepted by render")
+	}
+}
+
+func TestDataSources(t *testing.T) {
+	page := tmpl(t, "p.tmpl", `{{ .name }}`)
+	file := filepath.Join(filepath.Dir(page), "d.json")
+	if err := os.WriteFile(file, []byte(`{"name":"FromFile"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	tests := []struct {
-		name string
-		args []string
+		name  string
+		stdin string
+		args  []string
+		want  string
 	}{
-		// A flag with no template used to panic on args[0].
-		{"flag but no template", []string{"--sprig"}},
-		{"data and data-file", []string{"-d", "{}", "--data-file", "d.json", "x.tmpl"}},
-		{"bad json", []string{"-d", "{oops", "x.tmpl"}},
-		{"missing data file", []string{"--data-file", "testdata/nope.json", "x.tmpl"}},
+		{"inline", "", []string{page, "-d", `{"name":"Inline"}`}, "Inline"},
+		{"file", "", []string{page, "-d", "@" + file}, "FromFile"},
+		{"stdin", `{"name":"FromStdin"}`, []string{page, "-d", "@-"}, "FromStdin"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, _, err := parseFlags(tc.args); err == nil {
-				t.Error("expected an error")
+			got, err := run(t, tc.stdin, tc.args...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
 			}
 		})
 	}
 }
 
-func TestParseFlagsTopLevelArray(t *testing.T) {
-	_, data, err := parseFlags([]string{"-d", `[1,2]`, "x.tmpl"})
+// A bare "-" ends flag parsing in the argument parser, so it is rewritten
+// before dispatch. Without that, the flags after it are silently dropped.
+func TestStdinTemplateKeepsLaterFlags(t *testing.T) {
+	got, err := run(t, `text: {{ .x }}`, "-", "--text", "-d", `{"x":"kept"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := data.([]any); !ok {
-		t.Errorf("data = %#v, want a list", data)
+	if got != "text: kept" {
+		t.Errorf("got %q", got)
+	}
+
+	// The explicit flag spelling behaves the same.
+	got, err = run(t, `text: {{ .x }}`, "--stdin", "--text", "-d", `{"x":"kept"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "text: kept" {
+		t.Errorf("--stdin: got %q", got)
+	}
+}
+
+func TestRewriteStdinArg(t *testing.T) {
+	tests := []struct {
+		in   []string
+		want []string
+	}{
+		{[]string{"gotp", "-"}, []string{"gotp", "--stdin"}},
+		{[]string{"gotp", "-", "--text"}, []string{"gotp", "--stdin", "--text"}},
+		// A "-" that is the value of a flag must be left alone.
+		{[]string{"gotp", "p.tmpl", "-d", "-"}, []string{"gotp", "p.tmpl", "-d", "-"}},
+		{[]string{"gotp", "serve", "--addr", "-"}, []string{"gotp", "serve", "--addr", "-"}},
+		{[]string{"gotp", "p.tmpl"}, []string{"gotp", "p.tmpl"}},
+	}
+	for _, tc := range tests {
+		if got := rewriteStdinArg(tc.in); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("rewriteStdinArg(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestErrors(t *testing.T) {
+	page := tmpl(t, "p.tmpl", `{{ .a }}`)
+	dir := filepath.Dir(page)
+
+	tests := []struct {
+		name  string
+		stdin string
+		args  []string
+		want  string
+	}{
+		{"missing template", "", []string{"nope.tmpl"}, "no such template"},
+		{"bad json", "", []string{page, "-d", "{oops"}, "invalid template data"},
+		{"missing data file", "", []string{page, "-d", "@nope.json"}, "no such file"},
+		{"bare dash data", "", []string{page, "-d", "-"}, "-d @-"},
+		{"both stdin", "x", []string{"-", "-d", "@-"}, "both the template and the data"},
+		{"dir needs a file", "", []string{"fields", dir}, "is a directory"},
+		// A flag that only applies to serve must not be silently ignored.
+		{"serve flag on render", "", []string{page, "--addr", "9000"}, "not defined"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, errOut, err := runStreams(t, tc.stdin, tc.args...)
+			if err == nil {
+				t.Fatalf("expected an error, got output %q", out)
+			}
+			if got := err.Error() + errOut; !strings.Contains(got, tc.want) {
+				t.Errorf("error %q does not mention %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestGlobEntry(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "a.tmpl", "x")
+	write(t, dir, "_part.tmpl", `{{ define "p" }}p{{ end }}`)
+
+	// One match resolves.
+	got, err := run(t, "", filepath.Join(dir, "a*.tmpl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "x" {
+		t.Errorf("got %q", got)
+	}
+
+	// A glob of the whole set joins the argument list, and the entry is the
+	// one that renders something.
+	got, err = run(t, "", filepath.Join(dir, "*.tmpl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "x" {
+		t.Errorf("glob of the set: got %q", got)
+	}
+}
+
+// The entry does not have to be named first. A file holding only {{ define }}
+// blocks renders nothing, so it is skipped rather than silently producing an
+// empty page.
+func TestEntryOrderDoesNotMatter(t *testing.T) {
+	dir := t.TempDir()
+	page := write(t, dir, "page.tmpl", `{{ template "foot" . }}|body`)
+	foot := write(t, dir, "base-foot.tmpl", `{{ define "foot" }}FOOT{{ end }}`)
+
+	for _, args := range [][]string{{page, foot}, {foot, page}} {
+		got, stderr, err := runStreams(t, "", args...)
+		if err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		// Whatever the order, stdout is only the rendered template, so
+		// that piping it stays usable.
+		if got != "FOOT|body" {
+			t.Errorf("%v: stdout = %q", args, got)
+		}
+		// Choosing a different template than the one named first is
+		// reported, on the error stream.
+		if args[0] == foot && !strings.Contains(stderr, "only defines templates") {
+			t.Errorf("%v: expected a note on stderr, got %q", args, stderr)
+		}
+		if args[0] == page && stderr != "" {
+			t.Errorf("%v: unexpected note %q", args, stderr)
+		}
+	}
+
+	// Naming only a partial says so, instead of rendering nothing.
+	out, err := run(t, "", foot)
+	if err == nil {
+		t.Fatalf("expected an error, got %q", out)
+	}
+	if !strings.Contains(err.Error(), "only defines templates") {
+		t.Errorf("error = %v", err)
+	}
+
+	// When two templates both render, the first one still wins.
+	other := write(t, dir, "other.tmpl", `OTHER`)
+	got, err := run(t, "", other, page)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "OTHER" {
+		t.Errorf("got %q, want the first argument to win", got)
+	}
+}
+
+// A broken template named first is reported, not skipped over in favour of
+// another argument.
+func TestBrokenEntryIsReported(t *testing.T) {
+	dir := t.TempDir()
+	broken := write(t, dir, "broken.tmpl", `{{ if .x }}`)
+	write(t, dir, "fine.tmpl", `fine`)
+
+	if _, err := run(t, "", broken, filepath.Join(dir, "fine.tmpl")); err == nil {
+		t.Fatal("expected the parse error to be reported")
+	}
+}
+
+func TestIncludes(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	page := write("page.tmpl", `{{ template "head" . }}|body`)
+	write("base-head.tmpl", `{{ define "head" }}HEAD{{ end }}`)
+
+	// As a glob the shell left alone.
+	got, err := run(t, "", page, filepath.Join(dir, "base-*.tmpl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "HEAD|body" {
+		t.Errorf("glob include: got %q", got)
+	}
+
+	// As separate arguments, the way a shell expands them.
+	got, err = run(t, "", page, filepath.Join(dir, "base-head.tmpl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "HEAD|body" {
+		t.Errorf("expanded include: got %q", got)
+	}
+}
+
+func TestStrictFlag(t *testing.T) {
+	page := tmpl(t, "p.tmpl", `{{ .missing }}`)
+
+	if _, err := run(t, "", page, "-d", `{}`); err != nil {
+		t.Fatalf("without --strict: %v", err)
+	}
+	if _, err := run(t, "", page, "-d", `{}`, "--strict"); err == nil {
+		t.Error("with --strict: expected an error for the missing key")
+	}
+}
+
+func TestPickDirEntry(t *testing.T) {
+	tests := []struct {
+		name  string
+		files map[string]string
+		want  string
+	}{
+		{
+			"index wins",
+			map[string]string{
+				"_p.tmpl":    `{{ define "p" }}p{{ end }}`,
+				"alpha.tmpl": `alpha`,
+				"index.tmpl": `index`,
+			},
+			"index.tmpl",
+		},
+		{
+			"templates that render nothing are skipped",
+			map[string]string{
+				"_p.tmpl":    `{{ define "p" }}p{{ end }}`,
+				"alpha.tmpl": `alpha`,
+			},
+			"alpha.tmpl",
+		},
+		{
+			// A partial named without the underscore convention is
+			// still skipped, because it renders nothing.
+			"detection does not rely on the file name",
+			map[string]string{
+				"aaa.tmpl": `{{ define "a" }}a{{ end }}`,
+				"zzz.tmpl": `zzz`,
+			},
+			"zzz.tmpl",
+		},
+		{
+			"nothing renders: the first is kept for the picker",
+			map[string]string{
+				"a.tmpl": `{{ define "a" }}a{{ end }}`,
+				"b.tmpl": `{{ define "b" }}b{{ end }}`,
+			},
+			"a.tmpl",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for name, body := range tc.files {
+				write(t, dir, name, body)
+			}
+			in := &input{dir: dir}
+			found, err := in.candidates()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := pickDirEntry(in, found); filepath.Base(got) != tc.want {
+				t.Errorf("got %q, want %q", filepath.Base(got), tc.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeAddr(t *testing.T) {
+	tests := map[string]string{
+		"":               "127.0.0.1:1111",
+		"9000":           "127.0.0.1:9000",
+		":9000":          ":9000",
+		"localhost:9000": "localhost:9000",
+		"0.0.0.0:80":     "0.0.0.0:80",
+		"example":        "example:1111",
+	}
+	for in, want := range tests {
+		if got := normalizeAddr(in); got != want {
+			t.Errorf("normalizeAddr(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
@@ -77,214 +464,6 @@ func TestMatches(t *testing.T) {
 	for _, p := range []string{"other.txt", "sample.tmpl.swp", "base/a.html"} {
 		if matches(patterns, p) {
 			t.Errorf("%q should not match", p)
-		}
-	}
-}
-
-// TestStoreConcurrent is the regression test for the data race between the web
-// UI updating the data and requests rendering with it. Run with -race.
-func TestStoreConcurrent(t *testing.T) {
-	s := &store{}
-	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
-		wg.Add(2)
-		go func(i int) {
-			defer wg.Done()
-			s.set(map[string]any{"n": i})
-		}(i)
-		go func() {
-			defer wg.Done()
-			_ = s.get()
-		}()
-	}
-	wg.Wait()
-}
-
-// testServer builds a server over a temporary template.
-func testServer(t *testing.T, src string, cfg gotp.Config) (*httptest.Server, *store) {
-	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "sample.tmpl")
-	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	opts := &options{tmplPath: path, gotpCfg: cfg}
-	s := &store{}
-	srv := httptest.NewServer(newMux(opts, s, newBroker()))
-	t.Cleanup(srv.Close)
-	return srv, s
-}
-
-func get(t *testing.T, url string) (*http.Response, string) {
-	t.Helper()
-	res, err := http.Get(url)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer res.Body.Close()
-	b := make([]byte, 0, 1024)
-	buf := make([]byte, 512)
-	for {
-		n, err := res.Body.Read(buf)
-		b = append(b, buf[:n]...)
-		if err != nil {
-			break
-		}
-	}
-	return res, string(b)
-}
-
-func TestHandlers(t *testing.T) {
-	srv, data := testServer(t, `<p>{{ .name }}</p>`, gotp.Config{})
-	data.set(map[string]any{"name": "Gopher"})
-
-	t.Run("index declares html", func(t *testing.T) {
-		res, body := get(t, srv.URL+"/")
-		if ct := res.Header.Get("Content-Type"); ct != "text/html" {
-			t.Errorf("Content-Type = %q", ct)
-		}
-		if !strings.Contains(body, "<!DOCTYPE html>") {
-			t.Error("index page not served")
-		}
-	})
-
-	t.Run("out renders", func(t *testing.T) {
-		res, body := get(t, srv.URL+"/out")
-		if ct := res.Header.Get("Content-Type"); ct != "text/html" {
-			t.Errorf("Content-Type = %q", ct)
-		}
-		if body != "<p>Gopher</p>" {
-			t.Errorf("body = %q", body)
-		}
-	})
-
-	t.Run("source", func(t *testing.T) {
-		_, body := get(t, srv.URL+"/source")
-		if body != `<p>{{ .name }}</p>` {
-			t.Errorf("body = %q", body)
-		}
-	})
-
-	t.Run("fields and skeleton", func(t *testing.T) {
-		res, body := get(t, srv.URL+"/fields")
-		if ct := res.Header.Get("Content-Type"); ct != "application/json" {
-			t.Errorf("Content-Type = %q", ct)
-		}
-		var resp struct {
-			Data struct {
-				Fields   []string       `json:"fields"`
-				Skeleton map[string]any `json:"skeleton"`
-			} `json:"data"`
-		}
-		if err := json.Unmarshal([]byte(body), &resp); err != nil {
-			t.Fatalf("%v: %s", err, body)
-		}
-		if len(resp.Data.Fields) != 1 || resp.Data.Fields[0] != ".name" {
-			t.Errorf("fields = %q", resp.Data.Fields)
-		}
-		if _, ok := resp.Data.Skeleton["name"]; !ok {
-			t.Errorf("skeleton = %#v", resp.Data.Skeleton)
-		}
-	})
-
-	t.Run("data round trip", func(t *testing.T) {
-		req, _ := http.NewRequest(http.MethodPut, srv.URL+"/data", strings.NewReader(`{"name":"Rambo"}`))
-		res, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		res.Body.Close()
-		if res.StatusCode != http.StatusOK {
-			t.Fatalf("status = %d", res.StatusCode)
-		}
-		if _, body := get(t, srv.URL+"/out"); body != "<p>Rambo</p>" {
-			t.Errorf("body = %q", body)
-		}
-	})
-
-	t.Run("bad data is rejected", func(t *testing.T) {
-		req, _ := http.NewRequest(http.MethodPut, srv.URL+"/data", strings.NewReader(`{oops`))
-		res, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		res.Body.Close()
-		if res.StatusCode != http.StatusBadRequest {
-			t.Errorf("status = %d", res.StatusCode)
-		}
-	})
-
-	t.Run("wrong method", func(t *testing.T) {
-		res, err := http.Post(srv.URL+"/out", "text/plain", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		res.Body.Close()
-		if res.StatusCode != http.StatusMethodNotAllowed {
-			t.Errorf("status = %d", res.StatusCode)
-		}
-	})
-}
-
-// A template error must reach the preview escaped, not break the page. The
-// error text below quotes the failing action as "<len .a>", so an unescaped
-// message would inject a tag.
-func TestOutRendersErrorsEscaped(t *testing.T) {
-	srv, _ := testServer(t, `{{ len .a }}`, gotp.Config{})
-	_, body := get(t, srv.URL+"/out")
-	if !strings.Contains(body, "<pre") {
-		t.Fatalf("error not rendered as a block: %s", body)
-	}
-	if !strings.Contains(body, "&lt;len .a&gt;") || strings.Contains(body, "<len .a>") {
-		t.Errorf("error message was not escaped: %s", body)
-	}
-}
-
-func TestOutServesTextMode(t *testing.T) {
-	srv, data := testServer(t, `{{ .v }}`, gotp.Config{Text: true})
-	data.set(map[string]any{"v": "a & b"})
-	res, body := get(t, srv.URL+"/out")
-	if ct := res.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
-		t.Errorf("Content-Type = %q", ct)
-	}
-	if body != "a & b" {
-		t.Errorf("body = %q", body)
-	}
-}
-
-// The watcher must survive the atomic rename that editors use to save.
-func TestWatchSurvivesAtomicSave(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "sample.tmpl")
-	if err := os.WriteFile(path, []byte("one"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	changed := make(chan struct{}, 10)
-	fw, err := watch([]string{path}, func() { changed <- struct{}{} })
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer fw.Close()
-
-	save := func(body string) {
-		tmp := path + ".tmp"
-		if err := os.WriteFile(tmp, []byte(body), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Rename(tmp, path); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	// Two saves in a row: the second is the one the old per-file watch
-	// missed, because the first rename replaced the watched file.
-	for i, body := range []string{"two", "three"} {
-		save(body)
-		select {
-		case <-changed:
-		case <-time.After(3 * time.Second):
-			t.Fatalf("no change reported for save %d", i+1)
 		}
 	}
 }

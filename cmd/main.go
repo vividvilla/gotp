@@ -1,473 +1,453 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"io"
-	"log"
-	"net/http"
+	"io/fs"
 	"os"
 	"path/filepath"
-	"sync"
-	"time"
+	"slices"
+	"strings"
 
-	"github.com/fsnotify/fsnotify"
-	flag "github.com/spf13/pflag"
+	"github.com/urfave/cli/v3"
 	"github.com/vividvilla/gotp"
 )
-
-const helpTxt = `
-Usage:
-gotp sample.tmpl
-gotp --base-tmpl base.tmpl sample.tmpl
-gotp --base-tmpl base.tmpl sample.tmpl --data '{"name": "Gopher"}'
-gotp --base-tmpl base.tmpl sample.tmpl --data-file data.json
-gotp --base-tmpl 'base/*.tmpl' sample.tmpl
-gotp --text --stub-funcs mail.tmpl
-cat sample.tmpl | gotp -
-gotp --web sample.tmpl
-gotp --web --addr :9000 sample.tmpl
-gotp --web --base-tmpl base.tmpl sample.tmpl
-`
 
 // buildString is set at build time.
 var buildString = "unknown"
 
-// options is everything the flags produced.
-type options struct {
-	addr      string
-	basePaths []string
-	tmplPath  string
-	// src holds the template source when it was read from stdin, in which
-	// case tmplPath is not a file.
-	src     []byte
-	web     bool
-	gotpCfg gotp.Config
-}
-
-// store holds the template data. The web UI replaces it while requests render
-// with it, so every access goes through the lock.
-type store struct {
-	mu   sync.RWMutex
-	data any
-}
-
-func (s *store) get() any {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.data
-}
-
-func (s *store) set(v any) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.data = v
-}
-
-// Resp represents JSON response structure.
-type Resp struct {
-	Data  json.RawMessage `json:"data,omitempty"`
-	Error string          `json:"error,omitempty"`
-}
-
-func parseFlags(args []string) (*options, any, error) {
-	var (
-		opts     options
-		dataRaw  string
-		dataFile string
-		version  bool
-	)
-
-	fs := flag.NewFlagSet("gotp", flag.ContinueOnError)
-	fs.StringVarP(&opts.addr, "addr", "a", "127.0.0.1:1111", "Address to start the server on.")
-	fs.StringArrayVarP(&opts.basePaths, "base-tmpl", "b", nil, "Base template, or glob pattern.")
-	fs.StringVarP(&dataRaw, "data", "d", "", "Template data as JSON.")
-	fs.StringVar(&dataFile, "data-file", "", "File containing template data as JSON.")
-	fs.BoolVarP(&opts.web, "web", "w", false, "Run web UI")
-	fs.BoolVarP(&version, "version", "v", false, "Version info")
-	fs.BoolVar(&opts.gotpCfg.UseSprig, "sprig", false, "Enable sprig functions")
-	fs.BoolVar(&opts.gotpCfg.Text, "text", false, "Render as plain text (no HTML escaping)")
-	fs.BoolVar(&opts.gotpCfg.StubFuncs, "stub-funcs", false, "Stub out undefined template functions instead of failing")
-
-	fs.Usage = func() {
-		fmt.Print("Go template previewer - Live preview Go templates with custom data.\n")
-		fmt.Print(helpTxt)
-		fmt.Print(fs.FlagUsages())
-	}
-
-	if err := fs.Parse(args); err != nil {
-		// pflag prints the usage itself for --help.
-		if errors.Is(err, flag.ErrHelp) {
-			return nil, nil, nil
-		}
-		return nil, nil, err
-	}
-
-	// Nothing to do at all: show usage.
-	if fs.NFlag() == 0 && fs.NArg() == 0 {
-		fs.Usage()
-		return nil, nil, nil
-	}
-
-	if version {
-		fmt.Printf("Gotp - %s\n", buildString)
-		return nil, nil, nil
-	}
-
-	if fs.NArg() == 0 {
-		return nil, nil, fmt.Errorf("no template given\nrun with --help for usage")
-	}
-	opts.tmplPath = fs.Arg(0)
-
-	// "-" reads the template from stdin. It cannot be watched or re-read,
-	// so hold on to the source.
-	if opts.tmplPath == "-" {
-		b, err := io.ReadAll(os.Stdin)
-		if err != nil {
-			return nil, nil, fmt.Errorf("error reading template from stdin: %v", err)
-		}
-		opts.src = b
-	}
-
-	if dataRaw != "" && dataFile != "" {
-		return nil, nil, fmt.Errorf("use either --data or --data-file, not both")
-	}
-
-	raw := []byte(dataRaw)
-	if dataFile != "" {
-		b, err := os.ReadFile(dataFile)
-		if err != nil {
-			return nil, nil, fmt.Errorf("error reading template data file: %v", err)
-		}
-		raw = b
-	}
-
-	var data any
-	if len(raw) > 0 {
-		d, err := decodeTemplateData(raw)
-		if err != nil {
-			return nil, nil, fmt.Errorf("invalid template data: %v", err)
-		}
-		data = d
-	}
-	return &opts, data, nil
-}
-
-func decodeTemplateData(raw []byte) (any, error) {
-	var data any
-	if err := json.Unmarshal(raw, &data); err != nil {
-		return nil, err
-	}
-	return data, nil
-}
-
-// compile renders the template with the given data, reading it fresh from disk
-// so that edits show up without a restart.
-func (o *options) compile(data any) ([]byte, error) {
-	if o.src != nil {
-		return gotp.CompileString(o.gotpCfg, string(o.src), o.basePaths, data)
-	}
-	return gotp.Compile(o.gotpCfg, o.tmplPath, o.basePaths, data)
-}
-
-func (o *options) template() (*gotp.Template, error) {
-	return gotp.New(o.gotpCfg, o.tmplPath, o.src, o.basePaths)
-}
-
-// broker is a minimal server-sent-events fan-out. All the web UI needs is a
-// nudge to reload, so this replaces a dependency.
-type broker struct {
-	mu      sync.Mutex
-	clients map[chan struct{}]struct{}
-}
-
-func newBroker() *broker {
-	return &broker{clients: map[chan struct{}]struct{}{}}
-}
-
-func (b *broker) publish() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	for c := range b.clients {
-		// A client with a nudge already pending does not need another.
-		select {
-		case c <- struct{}{}:
-		default:
-		}
-	}
-}
-
-func (b *broker) handler(w http.ResponseWriter, r *http.Request) {
-	fl, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-		return
-	}
-
-	c := make(chan struct{}, 1)
-	b.mu.Lock()
-	b.clients[c] = struct{}{}
-	b.mu.Unlock()
-	defer func() {
-		b.mu.Lock()
-		delete(b.clients, c)
-		b.mu.Unlock()
-	}()
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.WriteHeader(http.StatusOK)
-	fl.Flush()
-
-	for {
-		select {
-		case <-c:
-			fmt.Fprint(w, "data: -\n\n")
-			fl.Flush()
-		case <-r.Context().Done():
-			return
-		}
-	}
-}
-
-// watch calls onChange when any file matching paths changes. It watches the
-// containing directories rather than the files themselves: editors save by
-// writing a new file and renaming it over the old one, which silently drops a
-// watch registered on the original file.
-func watch(paths []string, onChange func()) (*fsnotify.Watcher, error) {
-	fw, err := fsnotify.NewWatcher()
-	if err != nil {
-		return nil, err
-	}
-
-	dirs := map[string]struct{}{}
-	for _, p := range paths {
-		dirs[filepath.Dir(p)] = struct{}{}
-	}
-	for d := range dirs {
-		if err := fw.Add(d); err != nil {
-			fw.Close()
-			return nil, err
-		}
-	}
-
-	go func() {
-		var t *time.Timer
-		for {
-			select {
-			case ev, ok := <-fw.Events:
-				if !ok {
-					return
-				}
-				if !matches(paths, ev.Name) {
-					continue
-				}
-				log.Printf("changed: %s", ev.Name)
-				// One save fires several events; coalesce them
-				// into a single reload.
-				if t != nil {
-					t.Stop()
-				}
-				t = time.AfterFunc(100*time.Millisecond, onChange)
-			case err, ok := <-fw.Errors:
-				if !ok {
-					return
-				}
-				log.Printf("error watching files: %v", err)
-			}
-		}
-	}()
-	return fw, nil
-}
-
-// matches reports whether path is one of the given paths or glob patterns.
-// Comparison is on the file name, since watched paths may be relative while
-// events carry the directory they came from.
-func matches(patterns []string, path string) bool {
-	name := filepath.Base(path)
-	for _, p := range patterns {
-		if ok, _ := filepath.Match(filepath.Base(p), name); ok {
-			return true
-		}
-	}
-	return false
-}
-
-func writeJSONResp(w http.ResponseWriter, statusCode int, data []byte, e string) {
-	b, err := json.Marshal(Resp{Data: json.RawMessage(data), Error: e})
-	if err != nil {
-		log.Printf("error encoding response: %v, data: %v", err, string(data))
-		b, statusCode = []byte(`{"error":"error encoding response"}`), http.StatusInternalServerError
-	}
-	// Headers have to be set before the status is written, or they are
-	// dropped.
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-	w.Write(b)
-}
-
-// errorPage renders a template failure into the preview pane. The message is
-// escaped so that a template error containing markup cannot break the page.
-func errorPage(err error) []byte {
-	return []byte(`<pre style="font-family: monospace; color: #b00; background: #fff4f4;` +
-		`border: 1px solid #b00; border-radius: 5px; padding: 15px; white-space: pre-wrap">` +
-		html.EscapeString(err.Error()) + `</pre>`)
-}
-
-// newMux wires up the web UI routes.
-func newMux(opts *options, data *store, b *broker) *http.ServeMux {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/events", b.handler)
-
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html")
-		w.WriteHeader(http.StatusOK)
-		w.Write(gotp.WebUI)
-	})
-
-	// Rendered template output, loaded in the preview iframe.
-	mux.HandleFunc("/out", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		out, err := opts.compile(data.get())
-		if err != nil {
-			out = errorPage(err)
-		}
-		contentType := "text/html"
-		if opts.gotpCfg.Text {
-			contentType = "text/plain; charset=utf-8"
-			if err != nil {
-				contentType = "text/html"
-			}
-		}
-		w.Header().Set("Content-Type", contentType)
-		w.WriteHeader(http.StatusOK)
-		w.Write(out)
-	})
-
-	// Template source, shown in the UI.
-	mux.HandleFunc("/source", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		src := opts.src
-		if src == nil {
-			f, err := os.ReadFile(opts.tmplPath)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			src = f
-		}
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		w.Write(src)
-	})
-
-	mux.HandleFunc("/data", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			d, err := json.Marshal(data.get())
-			if err != nil {
-				writeJSONResp(w, http.StatusInternalServerError, nil, fmt.Sprintf("Error encoding template data: %v", err))
-				return
-			}
-			writeJSONResp(w, http.StatusOK, d, "")
-		case http.MethodPut:
-			body, err := io.ReadAll(r.Body)
-			if err != nil {
-				writeJSONResp(w, http.StatusBadRequest, nil, fmt.Sprintf("Error reading request body: %v", err))
-				return
-			}
-			d, err := decodeTemplateData(body)
-			if err != nil {
-				writeJSONResp(w, http.StatusBadRequest, nil, fmt.Sprintf("Error parsing JSON data: %v", err))
-				return
-			}
-			data.set(d)
-			b.publish()
-			writeJSONResp(w, http.StatusOK, nil, "")
-		default:
-			w.WriteHeader(http.StatusMethodNotAllowed)
-		}
-	})
-
-	// Fields the template reads, plus a data skeleton built from them.
-	mux.HandleFunc("/fields", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
-		t, err := opts.template()
-		if err != nil {
-			writeJSONResp(w, http.StatusInternalServerError, nil, fmt.Sprintf("Error parsing template: %v", err))
-			return
-		}
-		fields := t.Fields()
-		payload, err := json.Marshal(map[string]any{
-			"fields":   fields,
-			"skeleton": gotp.Skeleton(fields),
-		})
-		if err != nil {
-			writeJSONResp(w, http.StatusInternalServerError, nil, fmt.Sprintf("Error encoding template fields: %v", err))
-			return
-		}
-		writeJSONResp(w, http.StatusOK, payload, "")
-	})
-
-	return mux
-}
-
-func serve(opts *options, data *store) error {
-	b := newBroker()
-
-	// Watch the template and its base templates, unless the template came
-	// from stdin and cannot change.
-	if opts.src == nil {
-		fw, err := watch(append(opts.basePaths, opts.tmplPath), b.publish)
-		if err != nil {
-			return fmt.Errorf("error watching files: %v", err)
-		}
-		defer fw.Close()
-	}
-
-	log.Printf("Starting server on http://%s", opts.addr)
-	return http.ListenAndServe(opts.addr, newMux(opts, data, b))
-}
+// templateExts are the extensions treated as templates when a directory is
+// served.
+var templateExts = []string{".tmpl", ".tpl", ".gohtml", ".html"}
 
 func main() {
-	opts, data, err := parseFlags(os.Args[1:])
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
+	// Errors carrying an exit code are printed by the framework, and usage
+	// errors are printed before Run returns, so there is nothing to report
+	// here.
+	if err := rootCmd().Run(context.Background(), rewriteStdinArg(os.Args)); err != nil {
 		os.Exit(1)
 	}
-	// Usage or version was printed.
-	if opts == nil {
-		return
-	}
+}
 
-	if !opts.web {
-		out, err := opts.compile(data)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error rendering template: %v\n", err)
-			os.Exit(1)
+// valueFlags are the flags that take a following value, and so may legitimately
+// be followed by a bare "-".
+var valueFlags = []string{"-d", "--data", "-a", "--addr"}
+
+// rewriteStdinArg turns a bare "-" argument into the --stdin flag. The argument
+// parser reads "-" as the end of the flags and drops everything after it, which
+// would silently ignore the rest of the command line.
+func rewriteStdinArg(args []string) []string {
+	out := make([]string, len(args))
+	copy(out, args)
+	for i, a := range out {
+		if a != "-" || i == 0 {
+			continue
 		}
-		// Write the output as-is; a trailing newline the template does
-		// not have would break comparing the output against a file.
-		os.Stdout.Write(out)
-		return
+		if slices.Contains(valueFlags, out[i-1]) {
+			continue
+		}
+		out[i] = "--stdin"
+	}
+	return out
+}
+
+// out is where command output goes, which tests can replace.
+func out(c *cli.Command) io.Writer {
+	if w := c.Root().Writer; w != nil {
+		return w
+	}
+	return os.Stdout
+}
+
+// in is where piped input is read from, which tests can replace.
+func stdin(c *cli.Command) io.Reader {
+	if r := c.Root().Reader; r != nil {
+		return r
+	}
+	return os.Stdin
+}
+
+// fail returns a user-facing error with an exit code.
+func fail(format string, args ...any) error {
+	return cli.Exit("error: "+fmt.Sprintf(format, args...), 1)
+}
+
+func rootCmd() *cli.Command {
+	return &cli.Command{
+		Name:  "gotp",
+		Usage: "Live preview Go templates with custom data",
+		UsageText: `gotp [render] <template> [templates...]   Render a template to stdout
+gotp serve <template|directory> [...]     Live preview in the browser
+gotp fields <template> [templates...]     List the data fields a template reads
+                                          (--json prints a data skeleton)
+
+Every argument is a template, parsed together, and any of them may be a glob.
+The one that renders is the first that is not made up only of {{ define }}
+blocks, so a template and its partials can be given in any order. Use "-" to
+read the template from stdin. render is the default: "gotp page.tmpl" renders it.`,
+		Version:               buildString,
+		DefaultCommand:        "render",
+		EnableShellCompletion: true,
+		// Flags declared here are available to every command, so that
+		// they work with or without an explicit command name.
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:      "data",
+				Aliases:   []string{"d"},
+				Usage:     "template data: inline `JSON`, @file.json, or @- for stdin",
+				TakesFile: true,
+			},
+			&cli.BoolFlag{
+				Name:  "stdin",
+				Usage: "read the template from stdin; \"-\" as the template means the same",
+			},
+			&cli.BoolFlag{
+				Name:  "text",
+				Usage: "render as plain text, without HTML escaping",
+			},
+			&cli.BoolFlag{
+				Name:  "sprig",
+				Usage: "register the sprig function library",
+			},
+			&cli.BoolFlag{
+				Name:  "stub-funcs",
+				Usage: "stub out undefined functions instead of failing",
+			},
+			&cli.BoolFlag{
+				Name:  "strict",
+				Usage: "fail on data the template reads but does not have",
+			},
+		},
+		Commands: []*cli.Command{renderCmd(), serveCmd(), fieldsCmd()},
+	}
+}
+
+const argsUsage = "<template> [templates...]"
+
+func renderCmd() *cli.Command {
+	return &cli.Command{
+		Name:      "render",
+		Usage:     "Render a template to stdout",
+		ArgsUsage: argsUsage,
+		Action: func(_ context.Context, c *cli.Command) error {
+			// Bare "gotp" lands here through the default command.
+			if c.Args().Len() == 0 && !c.Bool("stdin") {
+				return cli.ShowAppHelp(c)
+			}
+			in, err := resolveInput(c, false)
+			if err != nil {
+				return err
+			}
+			data, err := loadData(c, in.src != nil)
+			if err != nil {
+				return err
+			}
+			t, err := in.template(in.entry)
+			if err != nil {
+				return fail("%v", err)
+			}
+			rendered, err := t.Render(data)
+			if err != nil {
+				return fail("%v", err)
+			}
+			// Write the output as-is: a trailing newline the template
+			// does not have would break comparing it against a file.
+			_, err = out(c).Write(rendered)
+			return err
+		},
+	}
+}
+
+func fieldsCmd() *cli.Command {
+	return &cli.Command{
+		Name:      "fields",
+		Usage:     "List the data fields a template reads",
+		ArgsUsage: argsUsage,
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:  "json",
+				Usage: "print a JSON data skeleton instead of one path per line",
+				Local: true,
+			},
+		},
+		Action: func(_ context.Context, c *cli.Command) error {
+			t, err := parseTarget(c)
+			if err != nil {
+				return err
+			}
+			fields := t.Fields()
+
+			if !c.Bool("json") {
+				for _, f := range fields {
+					fmt.Fprintln(out(c), f)
+				}
+				return nil
+			}
+
+			b, err := json.MarshalIndent(gotp.Skeleton(fields), "", "  ")
+			if err != nil {
+				return fail("%v", err)
+			}
+			fmt.Fprintln(out(c), string(b))
+			return nil
+		},
+	}
+}
+
+// parseTarget resolves and parses the template for the commands that only
+// inspect it.
+func parseTarget(c *cli.Command) (*gotp.Template, error) {
+	in, err := resolveInput(c, false)
+	if err != nil {
+		return nil, err
+	}
+	t, err := in.template(in.entry)
+	if err != nil {
+		return nil, fail("%v", err)
+	}
+	return t, nil
+}
+
+// input is the template set a command works on: one entry template plus the
+// patterns of everything parsed alongside it.
+type input struct {
+	cfg gotp.Config
+	// entry is the path of the template being rendered. It is a label
+	// rather than a path when src is set.
+	entry string
+	// src holds the template source when it was read from stdin.
+	src []byte
+	// args is every template argument, all parsed together so that a
+	// partial defined in one of them resolves in another. It includes the
+	// entry.
+	args []string
+	// dir is set when a directory is being served, in which case every
+	// template in it is a candidate entry.
+	dir string
+}
+
+// resolveInput turns the positional arguments into a template set. The first
+// argument is the entry, "-" reads it from stdin, and the rest are parsed
+// alongside it. Every argument may be a glob.
+func resolveInput(c *cli.Command, allowDir bool) (*input, error) {
+	args := c.Args().Slice()
+	in := &input{
+		cfg: gotp.Config{
+			Text:      c.Bool("text"),
+			UseSprig:  c.Bool("sprig"),
+			StubFuncs: c.Bool("stub-funcs"),
+			Strict:    c.Bool("strict"),
+		},
 	}
 
-	s := &store{}
-	s.set(data)
-	if err := serve(opts, s); err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		os.Exit(1)
+	// With --stdin the template comes from the pipe, so every argument is
+	// a template parsed alongside it.
+	if c.Bool("stdin") {
+		b, err := io.ReadAll(stdin(c))
+		if err != nil {
+			return nil, fail("reading the template from stdin: %v", err)
+		}
+		in.src, in.entry, in.args = b, "stdin", args
+		return in, nil
 	}
+
+	if len(args) == 0 {
+		return nil, fail("no template given, see: gotp %s --help", c.Name)
+	}
+	in.args = args
+
+	target := args[0]
+
+	fi, err := os.Stat(target)
+	if err != nil {
+		// Not a plain path: it may be a glob the shell left alone.
+		m, gerr := filepath.Glob(target)
+		if gerr != nil || len(m) == 0 {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil, fail("no such template: %s", target)
+			}
+			return nil, fail("%v", err)
+		}
+		if len(m) > 1 {
+			// A glob of a whole template set is not ambiguous: the
+			// matches join the argument list and the entry is
+			// chosen from them.
+			in.args = append(m, args[1:]...)
+			return in, in.chooseEntry(c)
+		}
+		in.args = append([]string{m[0]}, args[1:]...)
+		return in, in.chooseEntry(c)
+	}
+
+	if fi.IsDir() {
+		if !allowDir {
+			return nil, fail("%s is a directory, %s needs a template file", target, c.Name)
+		}
+		in.dir = target
+		found, err := in.candidates()
+		if err != nil {
+			return nil, err
+		}
+		if len(found) == 0 {
+			return nil, fail("no templates (%s) in %s", strings.Join(templateExts, ", "), target)
+		}
+		in.entry = pickDirEntry(in, found)
+		return in, nil
+	}
+
+	return in, in.chooseEntry(c)
+}
+
+// chooseEntry decides which of the template arguments is rendered. It is the
+// first one, unless that file holds only {{ define }} blocks and so renders
+// nothing: naming one of those is the usual result of letting a glob or a
+// listing decide the order of the arguments.
+func (in *input) chooseEntry(c *cli.Command) error {
+	first := in.args[0]
+
+	// Report a problem with the template the user named first, rather than
+	// quietly moving on to another one.
+	t, err := in.template(first)
+	if err != nil {
+		return fail("%v", err)
+	}
+	if t.HasBody() {
+		in.entry = first
+		return nil
+	}
+
+	for _, p := range in.args[1:] {
+		t, err := in.template(p)
+		if err != nil || !t.HasBody() {
+			continue
+		}
+		in.entry = p
+		fmt.Fprintf(c.Root().ErrWriter, "gotp: %s only defines templates, rendering %s\n", first, p)
+		return nil
+	}
+
+	return fail("%s only defines templates, so there is nothing to render.\n"+
+		"Name the template that uses it first: gotp <template> %s", first, first)
+}
+
+// pickDirEntry chooses which template of a served directory to preview first:
+// an index template if there is one, otherwise the first that renders
+// something of its own. The web UI can switch to any of the others.
+func pickDirEntry(in *input, found []string) string {
+	ordered := make([]string, 0, len(found))
+	for _, p := range found {
+		if strings.HasPrefix(filepath.Base(p), "index.") {
+			ordered = append(ordered, p)
+		}
+	}
+	for _, p := range found {
+		if !strings.HasPrefix(filepath.Base(p), "index.") {
+			ordered = append(ordered, p)
+		}
+	}
+	for _, p := range ordered {
+		if t, err := in.template(p); err == nil && t.HasBody() {
+			return p
+		}
+	}
+	return found[0]
+}
+
+// candidates lists the templates that may be previewed, sorted. It globs on
+// every call so that templates added while the server runs show up.
+func (in *input) candidates() ([]string, error) {
+	if in.dir == "" {
+		return []string{in.entry}, nil
+	}
+	var out []string
+	for _, ext := range templateExts {
+		m, err := filepath.Glob(filepath.Join(in.dir, "*"+ext))
+		if err != nil {
+			return nil, fail("%v", err)
+		}
+		out = append(out, m...)
+	}
+	slices.Sort(out)
+	return out, nil
+}
+
+// parsePaths returns the globs parsed alongside the entry. Patterns generated
+// for a directory are dropped when they match nothing, while a pattern the
+// user typed is left in so that a typo is reported rather than ignored.
+func (in *input) parsePaths() []string {
+	if in.dir == "" {
+		return in.args
+	}
+	var out []string
+	for _, ext := range templateExts {
+		p := filepath.Join(in.dir, "*"+ext)
+		if m, err := filepath.Glob(p); err == nil && len(m) > 0 {
+			out = append(out, p)
+		}
+	}
+	return append(out, in.args...)
+}
+
+// watchPaths returns the patterns whose changes should trigger a reload.
+func (in *input) watchPaths() []string {
+	return in.parsePaths()
+}
+
+// template parses the given entry along with everything parsed alongside it.
+func (in *input) template(entry string) (*gotp.Template, error) {
+	if in.src != nil {
+		return gotp.New(in.cfg, "stdin", in.src, in.parsePaths())
+	}
+	return gotp.New(in.cfg, entry, nil, in.parsePaths())
+}
+
+// source returns the text of the given entry.
+func (in *input) source(entry string) ([]byte, error) {
+	if in.src != nil {
+		return in.src, nil
+	}
+	return os.ReadFile(entry)
+}
+
+// loadData reads the --data value, which is inline JSON, @file.json, or @- for
+// stdin.
+func loadData(c *cli.Command, stdinTaken bool) (any, error) {
+	arg := c.String("data")
+	if arg == "" {
+		return nil, nil
+	}
+
+	// A bare "-" is a common guess for reading stdin.
+	if arg == "-" {
+		return nil, fail("--data takes a file with @, use: -d @-")
+	}
+
+	raw := []byte(arg)
+	if path, ok := strings.CutPrefix(arg, "@"); ok {
+		if path == "-" {
+			if stdinTaken {
+				return nil, fail("cannot read both the template and the data from stdin")
+			}
+			b, err := io.ReadAll(stdin(c))
+			if err != nil {
+				return nil, fail("reading the data from stdin: %v", err)
+			}
+			raw = b
+		} else {
+			b, err := os.ReadFile(path)
+			if err != nil {
+				return nil, fail("%v", err)
+			}
+			raw = b
+		}
+	}
+
+	var data any
+	if err := json.Unmarshal(raw, &data); err != nil {
+		return nil, fail("invalid template data: %v", err)
+	}
+	return data, nil
 }
