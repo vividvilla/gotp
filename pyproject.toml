@@ -1,6 +1,6 @@
 [project]
 name = "gotp"
-version = "1.0.0b2"
+version = "1.0.0"
 description = "Live preview and render Go templates with custom data"
 readme = "README.md"
 license = "MIT"
