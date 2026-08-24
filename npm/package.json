@@ -1,0 +1,21 @@
+{
+  "name": "@vividvilla/gotp",
+  "version": "1.0.0-beta.2",
+  "description": "Live preview and render Go templates with custom data",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vividvilla/gotp.git"
+  },
+  "bin": {
+    "gotp": "bin/gotp.js"
+  },
+  "files": ["bin"],
+  "optionalDependencies": {
+    "@vividvilla/gotp-darwin-arm64": "1.0.0-beta.2",
+    "@vividvilla/gotp-darwin-x64": "1.0.0-beta.2",
+    "@vividvilla/gotp-linux-arm64": "1.0.0-beta.2",
+    "@vividvilla/gotp-linux-x64": "1.0.0-beta.2",
+    "@vividvilla/gotp-win32-x64": "1.0.0-beta.2"
+  }
+}

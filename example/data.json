@@ -1,9 +1,34 @@
 {
-    "Author": "me myself",
-    "Content": "This is a content",
-    "Created": "12th June 2024",
-    "CurrentYear": 2024,
-    "Expires": "11th July 2024",
-    "ID": 1,
-    "Title": "This is a title"
+  "url": "http://go.dev/",
+  "login_url": "http://go.dev/",
+  "receipt": {
+    "number": "1923-2093",
+    "invoice_number": "2ABC1234-20923",
+    "payment_method": "VISA – 4252",
+    "paid_on": "August 1, 2023",
+    "period": "JULY 10, 2023 – AUGUST 1, 2023",
+    "amount": 99.75,
+    "total": 99.75,
+    "amount_paid": 99.75
+  },
+  "items": [
+    {
+      "name": "Golang Pro",
+      "detail": "5 seats",
+      "amount": 89.75
+    },
+    {
+      "name": "Extra storage",
+      "amount": 10.0
+    }
+  ],
+  "otp": {
+    "code": "418 902",
+    "expires_in": "10 minutes",
+    "request": {
+      "device": "Firefox 141 on Linux",
+      "location": "Bengaluru, India",
+      "at": "24 Aug 2026 at 01:12 IST"
+    }
   }
+}

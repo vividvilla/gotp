@@ -1,0 +1,197 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64, platform: linux-x64 }
+          - { goos: linux, goarch: arm64, platform: linux-arm64 }
+          - { goos: linux, goarch: arm }
+          - { goos: darwin, goarch: amd64, platform: darwin-x64 }
+          - { goos: darwin, goarch: arm64, platform: darwin-arm64 }
+          - { goos: windows, goarch: amd64, platform: win32-x64, ext: .exe }
+          - { goos: windows, goarch: arm64, ext: .exe }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+
+      - name: Build
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          build="$GITHUB_REF_NAME ($(git rev-parse --short HEAD) $(git show -s --format=%ci HEAD))"
+          mkdir -p stage
+          go build -trimpath -ldflags "-s -w -X 'main.buildString=$build'" \
+            -o "stage/gotp${{ matrix.ext }}" ./cmd
+          cp README.md LICENSE stage/
+
+      - name: Archive
+        run: |
+          mkdir -p dist
+          name="gotp_${GITHUB_REF_NAME}_${{ matrix.goos }}_${{ matrix.goarch }}"
+          if [ "${{ matrix.goos }}" = windows ]; then
+            (cd stage && zip -qr "../dist/$name.zip" .)
+          else
+            tar -czf "dist/$name.tar.gz" -C stage .
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+
+      # PyPI and npm only cover the platforms those ecosystems' users actually
+      # run on: not 32-bit ARM Linux, not Windows on ARM. The GitHub release
+      # above still carries archives for both.
+      - if: matrix.platform != ''
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - if: matrix.platform != ''
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - if: matrix.platform != ''
+        name: Package for PyPI and npm
+        run: |
+          python3 scripts/package_release.py \
+            --binary "stage/gotp${{ matrix.ext }}" \
+            --platform ${{ matrix.platform }} \
+            --version "$GITHUB_REF_NAME" \
+            --dist pkg
+      - if: matrix.platform != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.platform }}
+          path: pkg/*.whl
+          if-no-files-found: error
+      - if: matrix.platform != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-${{ matrix.platform }}
+          path: pkg/*.tgz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum ./*.tar.gz ./*.zip > SHA256SUMS
+
+      - name: Create release
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          args=()
+          # A tag like v1.0.0-rc.1 is published as a pre-release.
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then args+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" \
+            ./*.tar.gz ./*.zip SHA256SUMS \
+            --verify-tag --generate-notes "${args[@]}"
+
+  publish-pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-*
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  publish-npm:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: npm-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Select npm distribution tag
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          tag=latest
+          if [[ "$version" == *-* ]]; then
+            prerelease=${version#*-}
+            tag=${prerelease%%.*}
+          fi
+          echo "NPM_TAG=$tag" >> "$GITHUB_ENV"
+      - name: Publish native packages
+        run: for package in dist/*.tgz; do npm publish "./$package" --access public --provenance --tag "$NPM_TAG"; done
+      - run: npm publish ./npm --access public --provenance --tag "$NPM_TAG"
+
+  publish-homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: vividvilla/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+      - name: Download release archives
+        run: gh release download "$GITHUB_REF_NAME" --pattern "gotp_*_linux_*.tar.gz" --pattern "gotp_*_darwin_*.tar.gz" --dir dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+      - name: Generate formula
+        run: python3 scripts/homebrew_formula.py --version "$GITHUB_REF_NAME" --dist dist --output homebrew-tap/Formula/gotp.rb
+      - run: ruby -c Formula/gotp.rb
+        working-directory: homebrew-tap
+      - name: Publish formula
+        working-directory: homebrew-tap
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/gotp.rb
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "gotp ${GITHUB_REF_NAME#v}"
+          git push
