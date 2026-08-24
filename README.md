@@ -1,16 +1,79 @@
 <a href="https://zerodha.tech"><img src="https://zerodha.tech/static/images/github-badge.svg" align="right" /></a>
 
-# Go Template Previewer
+# gotp
 
-Simple utility to live edit Go template and preview with custom data.
+Live preview and render Go templates with custom data, in the browser or on the command line.
 
-![Screenshot](assets/screenshot.png "Gotp web mode")
+- Single binary, self-contained
+- Web UI with live reload
+- Browse and render templates in a directory
+- Automatic field discovery
 
-## Installation
-
-Download the latest release from the [releases page](https://github.com/vividvilla/gotp/releases), or clone this repository and run `make build`. The web UI is embedded in the binary, so the binary is all you need.
+![gotp serve](assets/screenshot.png)
 
 ## Usage
+
+```sh
+# Live preview in the browser, reloading on save
+gotp serve page.tmpl partials/*.tmpl -d @data.json --open
+
+# Serve a whole directory and switch templates in the UI
+gotp serve templates/ --addr 9000
+
+# Render to stdout instead
+gotp page.tmpl
+
+# With its partials, and some data
+gotp page.tmpl partials/*.tmpl -d '{"name": "Gopher"}'
+
+# Data from a file, or from a pipe
+gotp page.tmpl -d @data.json
+kubectl get cm -o json | gotp page.tmpl -d @-
+
+# List the fields the template reads, one path per line
+gotp fields page.tmpl partials/*.tmpl
+
+# Scaffold the data file out of those fields, then use it
+gotp fields --json page.tmpl partials/*.tmpl > data.json
+gotp page.tmpl partials/*.tmpl -d @data.json
+
+# Not HTML: plain text mail, YAML, SQL. Values are not escaped
+gotp mail.tmpl --text -d '{"name": "Tom & Jerry"}'
+
+# Templates that call functions your application registers
+gotp mail.tmpl --stub-funcs
+
+# Fail on missing data instead of rendering <no value>
+gotp page.tmpl -d @data.json --strict
+
+# Read the template from stdin
+cat page.tmpl | gotp -
+
+# Check that a template still parses, for CI. No data needed
+gotp fields page.tmpl partials/*.tmpl > /dev/null
+```
+
+Run `gotp --help` for all options, or `gotp <command> --help` for one command.
+
+## Install
+
+### Standalone binary
+
+Download an archive from [GitHub Releases](https://github.com/vividvilla/gotp/releases),
+verify it against `SHA256SUMS`, and put `gotp` (`gotp.exe` on Windows) on your `PATH`.
+
+Prebuilt binaries cover Linux x86-64/ARM64/ARM, macOS x86-64/Apple Silicon, and
+Windows x86-64/ARM64. The web UI ships inside the binary, so there is nothing
+else to install.
+
+### From source
+
+```sh
+git clone https://github.com/vividvilla/gotp && cd gotp
+make build
+```
+
+## Commands
 
 ```txt
 gotp [render] <template> [templates...]   Render a template to stdout
@@ -18,103 +81,132 @@ gotp serve <template|directory> [...]     Live preview in the browser
 gotp fields <template> [templates...]     List the data fields a template reads
 ```
 
-Every argument is a template, parsed together with the others, so base
-templates and partials are positional arguments rather than repeated flags. Any
-of them may be a glob, whether the shell expands it or you quote it:
+`render` is the default, so `gotp page.tmpl` and `gotp render page.tmpl` are the
+same thing.
 
-```bash
+### Arguments
+
+Every argument is a template, and they all get parsed together. Base templates and
+partials go in as arguments, not as repeated flags. Any argument can be a glob:
+
+```sh
 gotp page.tmpl partials/*.tmpl      # expanded by the shell
 gotp page.tmpl 'partials/*.tmpl'    # expanded by gotp
 ```
 
-Quoting is worth it under `serve`: the pattern is kept, so a template added to
+Quote it under `serve` and gotp keeps the pattern, so a template you add to
 `partials/` later triggers a reload too.
 
-The template that gets rendered is the first argument, unless it holds only
-`{{ define }}` blocks. Those render nothing on their own, so gotp skips to the
-first argument that does and says which one it picked on stderr. Order therefore
-does not matter when you pass a template and its partials in any arrangement:
+gotp renders the first argument, unless that file holds nothing but
+`{{ define }}` blocks. A file like that renders nothing by itself, so gotp moves on
+to the first argument that does, and prints on stderr which one it chose. Order
+does not matter:
 
-```bash
+```sh
 gotp page.tmpl base-footer.tmpl     # both render page.tmpl
 gotp base-footer.tmpl page.tmpl
 gotp *.tmpl                         # order decided by the shell, still fine
 ```
 
-Order only decides between arguments that each render something of their own, in
-which case the first wins. Naming nothing but partials is an error that says so,
-rather than printing an empty page.
+When two arguments both render something, the first one wins. Name nothing but
+partials and you get an error saying so, not a blank page.
 
-`render` is the default, so `gotp page.tmpl` and `gotp render page.tmpl` are the
-same. Use `-` as the template to read it from stdin.
+Use `-` as the template to read it from stdin.
 
 ### Flags
 
-These apply to any command:
+These apply to every command:
 
-```txt
--d, --data JSON   template data: inline JSON, @file.json, or @- for stdin
-    --text        render as plain text, without HTML escaping
-    --sprig       register the sprig function library
-    --stub-funcs  stub out undefined functions instead of failing
-    --strict      fail on data the template reads but does not have
-    --stdin       read the template from stdin, same as passing "-"
-```
+| Flag | |
+| --- | --- |
+| `-d, --data JSON` | Template data: inline JSON, `@file.json`, or `@-` for stdin |
+| `--text` | Render with `text/template`, so values are not HTML-escaped |
+| `--sprig` | Register the [Sprig](http://masterminds.github.io/sprig/) function library |
+| `--stub-funcs` | Stub out functions the template calls but nothing defines |
+| `--strict` | Fail on data the template reads but does not have |
+| `--stdin` | Read the template from stdin, the same as passing `-` |
 
-`fields` adds:
+`fields` adds `--json`, which prints a JSON data skeleton instead of one path per
+line. `serve` adds:
 
-```txt
-    --json           print a JSON data skeleton instead of one path per line
-```
+| Flag | |
+| --- | --- |
+| `-a, --addr address` | Address to listen on, default `127.0.0.1:1111` |
+| `--open` | Open the preview in the default browser |
 
-`serve` adds:
+`--addr` takes a bare port (`--addr 9000`) and defaults to loopback, so a preview
+is not exposed to the network. Pass `--addr :9000` to listen on every interface.
 
-```txt
--a, --addr address   address to listen on (default "127.0.0.1:1111")
-    --open           open the preview in the default browser
-```
+## The web UI
 
-`--addr` takes a bare port (`--addr 9000`) and defaults to loopback, so the
-preview is not exposed to the network. Pass `--addr :9000` to listen on every
-interface.
+`gotp serve` opens two panes: the rendered template on the left, its data on the
+right.
 
-### Examples
+The left toolbar holds the template picker, a Preview/Source pair, and a width
+toggle for checking a mobile layout. The size being rendered shows in the middle.
+The gear sets the width the toggle uses.
 
-```bash
-# Render to stdout.
-gotp page.tmpl
+The right panel is the data, as a flat list of one row per field path or as raw
+JSON. gotp compares what the template reads against what the data has, and marks
+a field the template reads but the data lacks as `unset`.
 
-# With base templates and data.
-gotp page.tmpl base-*.tmpl -d '{"name": "Gopher"}'
+Editing a value keeps its JSON type, because a template calling
+`printf "%.2f"` breaks on a string. Applying patches the data you gave instead of
+replacing it, so keys the template never reads survive. If there is no data at
+all, the panel offers to fill in the skeleton that `gotp fields --json` prints.
 
-# Scaffold a data file from what the template reads, then use it.
-gotp fields --json page.tmpl base-*.tmpl > data.json
-gotp render page.tmpl base-*.tmpl -d @data.json
+The theme follows the operating system, with a switch in the top bar.
 
-# Data from a pipe.
-kubectl get cm -o json | gotp page.tmpl -d @-
+Styling is [oat](https://github.com/knadh/oat) (MIT), vendored into `assets/` and
+embedded with the rest of the UI. The rendered template loads in an iframe, so the
+UI's own CSS cannot reach it.
 
-# Templates that are not HTML (plain text mail, YAML, SQL) want --text, so that
-# values are not HTML-escaped.
-gotp mail.tmpl --text -d '{"name": "Tom & Jerry"}'
+## Serving a directory
 
-# Read the template from stdin.
-cat page.tmpl | gotp - --text
+`gotp serve <directory>` parses every `.tmpl`, `.tpl`, `.gohtml` and `.html` file
+in it, so partials defined in sibling files resolve, and the UI gets a picker to
+switch between them.
 
-# Live preview, opening a browser.
-gotp serve page.tmpl base-*.tmpl -d @data.json --open
+The picker only offers templates that render something, so a file of
+`{{ define }}` blocks never shows up as a blank preview. It opens on an `index.*`
+template if there is one, otherwise the first that renders. gotp works this out
+from what a file contains, not from how it is named.
 
-# Live preview a whole directory, switching between templates in the UI.
-gotp serve templates/ --addr 9000
+## Template functions
 
-# Check that a template still parses, for CI. No data needed.
-gotp fields page.tmpl base-*.tmpl > /dev/null
-```
+A template that calls a function your application registers will not parse on its
+own, since nothing defines that function. `--stub-funcs` registers a placeholder
+for each one so the template still previews:
+
+- if the data has a key matching the function name, the stub returns that value,
+  so `{{ nominee_name }}` can be mocked with `-d '{"nominee_name": "Gopher"}'`
+- inside a pipeline the stub passes its input through, so `{{ .date | myformat }}`
+  renders `.date`
+- otherwise it renders a visible `«name»` placeholder
+
+For the functions from [Sprig](http://masterminds.github.io/sprig/), `--sprig`
+registers the real implementations instead.
+
+## Discovered fields
+
+`gotp fields` lists every field a template reads, including fields inside `if`,
+`range` and `with`, and fields inside the partials it calls. Paths are scoped to
+where they are read, so a field inside `{{ range .posts }}` reads as
+`.posts[].title`, and a partial called as `{{ template "totals" .receipt }}`
+reports its fields against `.receipt`.
+
+The scoping catches a common slip: `{{ .url }}` written inside
+`{{ with .request }}` reads `.request.url`, and the field list shows it.
+
+Two limits. Fields reached through a variable
+(`{{ range $_, $post := .posts }}{{ $post.title }}`) are not reported, since
+resolving those needs a symbol table. A scope gotp cannot resolve statically gets
+a `*` segment and stays out of the `--json` skeleton.
 
 ## Example
 
-`example/` is two emails over one set of partials, the way real template sets
-are built:
+`example/` is two emails over one set of partials, the way real template sets are
+built:
 
 ```txt
 example/receipt.tmpl       a receipt: range, a conditional inside it, printf
@@ -125,104 +217,34 @@ example/base-footer.tmpl   {{ define "footer" }}
 example/data.json          data for both
 ```
 
-The two emails share the header and footer and read different parts of the same
-data file, which is what `serve` on the directory is for: the picker switches
-between them and the panel re-reads the fields for whichever one is showing.
-
-```bash
-# Render one. The partials can be named in any order, since neither of them
-# renders anything by itself.
+```sh
+# Render one. The partials can be named in any order
 gotp --text example/receipt.tmpl example/base-*.tmpl -d @example/data.json
 
-# Preview live, with a picker to switch between the two emails.
+# Preview live, with a picker to switch between the two emails
 gotp serve example/ --text -d @example/data.json --open
 
-# What data does each one need? Both are covered by example/data.json.
+# What data does each one need? Both are covered by example/data.json
 gotp fields example/receipt.tmpl example/base-*.tmpl
 gotp fields example/otp.tmpl example/base-*.tmpl
 ```
 
-The logo is an inline SVG rather than an `<img>`, so the example renders
-identically with no network access.
+This set needs the `--text`. Email HTML reaches Outlook through conditional
+comments like `<!--[if mso]>`, and `html/template` strips comments, so the default
+mode drops them silently. The same applies to any HTML email.
 
-Note the `--text`: this one needs it. Email HTML uses conditional comments like
-`<!--[if mso]>` to reach Outlook, and `html/template` **elides comments**, so the
-default mode would quietly drop them. It is worth knowing for any HTML email.
-
-The field lists show what the discovery handles. In the receipt,
-`.items[].detail` is read inside an `{{ if }}` inside a `{{ range }}`, and
-`.receipt.total` is read inside a partial called as
-`{{ template "totals" .receipt }}`, so it is reported against that scope rather
-than the root. In the OTP email, `.otp.request.device` is read inside a
-`{{ with }}`, and the same scoping applies — which is how you catch the classic
-mistake of writing `{{ .url }}` inside a `with` and silently reading
-`.otp.request.url`.
-
-## The web UI
-
-`gotp serve` opens a two-pane page: the rendered template on the left, its data
-on the right.
-
-- **Left toolbar** — the template picker (when a directory is served), a
-  Preview/Source pair, and a width toggle that constrains the preview to 390px
-  so you can check a mobile layout. The readout shows the width being rendered.
-- **Right panel** — the data, either as a flat list of one row per field path or
-  as raw JSON. The list is built by reconciling what the template reads against
-  what the data has, so a field the template reads and the data lacks is marked
-  **unset**. Editing a value keeps its JSON type, and applying patches the data
-  you gave rather than replacing it, so keys the template never reads survive.
-- **No data yet?** The panel offers to fill in a skeleton of everything the
-  template reads — the same thing `gotp fields --json` prints.
-- The theme follows the operating system, with a switch in the top bar.
-
-The page is styled with [oat](https://github.com/knadh/oat) (MIT), vendored into
-`assets/` and embedded in the binary along with the rest of the UI: `gotp serve`
-makes no outbound request, so it works with no network. Because the rendered
-template loads in an iframe, none of the UI's own CSS can reach it.
-
-## Serving a directory
-
-`gotp serve <directory>` parses every `.tmpl`, `.tpl`, `.gohtml` and `.html`
-file in it, so partials defined in sibling files resolve, and the web UI gets a
-picker to switch between them. The first preview is an `index.*` template if
-there is one, otherwise the first template that renders something of its own.
-Partials are skipped by what they contain, not by how they are named.
-
-## Custom template functions
-
-Templates that call functions your application registers cannot be parsed on
-their own, since the function is not defined. `--stub-funcs` registers a
-placeholder for each of them so the template still previews:
-
-- if the template data has a key matching the function name, the stub returns
-  that value, so `{{ nominee_name }}` can be mocked with
-  `-d '{"nominee_name": "Gopher"}'`
-- inside a pipeline the stub passes its input through, so `{{ .date | myformat }}`
-  renders `.date`
-- otherwise it renders a visible `«name»` placeholder
-
-For the functions from [Sprig](http://masterminds.github.io/sprig/), use
-`--sprig` instead, which registers the real implementations.
-
-## Discovered fields
-
-`gotp fields` lists every field the template reads, including fields inside
-`if`, `range`, `with` and base templates. Paths are scoped to where they are
-read, so a field inside `{{ range .posts }}` reads as `.posts[].title`.
-`gotp fields --json` turns the same list into a JSON data skeleton, which the
-web UI also offers as **Copy as JSON data**.
-
-Fields reached through a variable
-(`{{ range $_, $post := .posts }}{{ $post.title }}`) are not reported, and a
-scope that cannot be resolved statically is marked with a `*` segment.
+Both images are inline SVG, so the example renders the same with no network.
 
 ## Development
 
-```bash
-make check   # go vet + go test -race
-make build   # build ./gotp
+```sh
+make check   # gofmt, go vet, go test -race
+make build   # ./gotp
 ```
 
-The web UI lives in `assets/` (`index.html`, `app.js`, and a vendored copy of
-oat) and is embedded with `go:embed`, so a rebuild is all that is needed after
-changing it.
+The web UI is `assets/index.html`, `assets/app.js` and a vendored copy of oat,
+embedded with `go:embed`. Rebuild after changing it.
+
+## License
+
+MIT
