@@ -22,9 +22,14 @@
   nav[data-topnav] code { font-size: var(--text-8); color: var(--muted-foreground); }
   .panes { display: flex; flex-grow: 1; min-height: 0; }
   main { display: flex; flex-direction: column; flex-grow: 1; min-width: 0; padding: 0; }
+  main > header { position: relative; }
+  #canvas-size { position: absolute; left: 50%; transform: translateX(-50%);
+                 font-family: var(--font-mono); font-size: var(--text-8);
+                 color: var(--muted-foreground); white-space: nowrap;
+                 pointer-events: none; }
+  #settings { min-width: 320px; }
   main > header select { width: auto; max-width: 300px; flex-shrink: 1; min-width: 0;
                          margin-top: 0; padding: 5px 30px 5px 10px; }
-  output#width { white-space: nowrap; min-width: 56px; text-align: right; }
   [role=group] button svg { width: 15px; height: 15px; }
   main > header, aside > header, aside > .meta {
     display: flex; align-items: center; gap: var(--space-2); min-height: 44px;
@@ -116,7 +121,10 @@
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18.5h2"/></svg>
         </button>
       </div>
-      <output id="width"><code>620 px</code></output>
+      <button class="ghost" id="settings-open" aria-label="Preview settings">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2v.2a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.9.4l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0-1.2-2.9H3a2 2 0 1 1 0-4h.2a1.7 1.7 0 0 0 1.5-2.7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 2.9-1.2V3a2 2 0 1 1 4 0v.2a1.7 1.7 0 0 0 2.9 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 1.2 2.9H21a2 2 0 1 1 0 4h-.2a1.7 1.7 0 0 0-1.4.9z"/></svg>
+      </button>
+      <output id="canvas-size" aria-label="Preview canvas size"></output>
     </header>
 
     <div class="stage" role="tabpanel" id="panel-preview" aria-labelledby="tab-preview">
@@ -169,6 +177,23 @@
     </footer>
   </aside>
 </div>
+
+<dialog id="settings">
+  <form method="dialog">
+    <header>
+      <h3>Preview settings</h3>
+    </header>
+    <div data-field>
+      <label for="mobile-width">Mobile width</label>
+      <input type="number" id="mobile-width" name="mobile-width" min="240" max="1600" step="10" value="390">
+      <small data-hint>Pixels the mobile toggle constrains the preview to.</small>
+    </div>
+    <footer>
+      <button type="button" class="outline" id="settings-cancel">Cancel</button>
+      <button value="save">Save</button>
+    </footer>
+  </form>
+</dialog>
 
 <script src="/app.js"></script>
 </body>

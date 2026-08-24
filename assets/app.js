@@ -273,6 +273,7 @@ async function apply() {
 for (const t of VIEW_TABS) {
   $(t.tab).addEventListener('click', () => {
     selectTab(VIEW_TABS, t.tab);
+    showCanvasSize();
     if (t.tab === 'tab-source') refreshSource();
   });
 }
@@ -284,16 +285,53 @@ for (const t of MODE_TABS) {
   });
 }
 
+// The width the mobile toggle constrains the preview to, in pixels.
+function mobileWidth() {
+  try {
+    const stored = Number(localStorage.getItem('gotp-mobile-width'));
+    if (stored >= 240 && stored <= 1600) return stored;
+  } catch (e) {}
+  return 390;
+}
+
+function isMobile() {
+  return $('w-mobile').getAttribute('aria-pressed') === 'true';
+}
+
+// The size of the canvas the template is rendering into, which is only
+// meaningful while the preview is the visible panel.
+function showCanvasSize() {
+  const out = $('out');
+  const el = $('canvas-size');
+  el.hidden = $('panel-preview').hidden;
+  if (!el.hidden) el.textContent = `${out.clientWidth} × ${out.clientHeight}`;
+}
+
 function setWidth(mobile) {
+  const width = mobileWidth();
   $('w-desktop').setAttribute('aria-pressed', String(!mobile));
   $('w-mobile').setAttribute('aria-pressed', String(mobile));
-  $('out').style.width = mobile ? '390px' : '100%';
-  // Report what is actually being rendered, not the setting.
-  $('width').textContent = `${$('out').clientWidth} px`;
+  $('w-mobile').setAttribute('aria-label', `Mobile width, ${width} pixels`);
+  $('out').style.width = mobile ? `${width}px` : '100%';
+  showCanvasSize();
 }
+
 $('w-desktop').addEventListener('click', () => setWidth(false));
 $('w-mobile').addEventListener('click', () => setWidth(true));
-addEventListener('resize', () => setWidth($('w-mobile').getAttribute('aria-pressed') === 'true'));
+addEventListener('resize', () => setWidth(isMobile()));
+
+$('settings-open').addEventListener('click', () => {
+  $('mobile-width').value = String(mobileWidth());
+  $('settings').showModal();
+});
+$('settings-cancel').addEventListener('click', () => $('settings').close());
+$('settings').addEventListener('close', () => {
+  if ($('settings').returnValue !== 'save') return;
+  const value = Number($('mobile-width').value);
+  if (!(value >= 240 && value <= 1600)) return;
+  try { localStorage.setItem('gotp-mobile-width', String(value)); } catch (e) {}
+  setWidth(isMobile());
+});
 
 $('theme').addEventListener('click', () => {
   const root = document.documentElement;
