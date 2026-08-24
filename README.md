@@ -57,6 +57,35 @@ Run `gotp --help` for all options, or `gotp <command> --help` for one command.
 
 ## Install
 
+### uvx, pipx, or pip
+
+Run without installing:
+
+```sh
+uvx gotp page.tmpl
+```
+
+Or install it:
+
+```sh
+pipx install gotp
+uv tool install gotp
+pip install gotp  # inside a virtual environment
+```
+
+### npx or npm
+
+```sh
+npx @vividvilla/gotp page.tmpl   # run without installing
+npm install --global @vividvilla/gotp
+```
+
+### Homebrew
+
+```sh
+brew install vividvilla/tap/gotp
+```
+
 ### Standalone binary
 
 Download an archive from [GitHub Releases](https://github.com/vividvilla/gotp/releases),
